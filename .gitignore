@@ -1,0 +1,26 @@
+# API Key 与敏感配置（不提交）
+.env
+.env.bak*
+
+# 虚拟环境与缓存（可再生成，不提交）
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 浏览器测试残留（非文档，约 40MB，不提交）
+/docs/chrome-profile-*/
+
+# 向量索引（可从文档重新索引，且运行时被锁定，不提交）
+/data/qdrant/
+
+# 数据库历史备份（冗余，不提交）
+/data/*.bak*
+
+# 本地账号库（含密码哈希与问答记录，不提交）
+/data/knowledge.db
+/data/knowledge.db-wal
+/data/knowledge.db-shm
+
+# 改名前的界面截图，含本地用户名；重截后再提交
+/assets/screenshots/

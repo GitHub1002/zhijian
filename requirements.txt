@@ -1,0 +1,12 @@
+fastapi>=0.110
+python-multipart>=0.0.9
+uvicorn[standard]>=0.29
+qdrant-client>=1.9
+fastembed>=0.3
+openai>=1.30
+python-dotenv>=1.0
+markdown>=3.6
+pymdown-extensions>=10.0
+pygments>=2.17
+langgraph>=0.2
+langchain-core>=0.2,<2
