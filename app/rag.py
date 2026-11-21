@@ -1,3 +1,8 @@
+"""问答先检索、再判断有没有依据，通过之后才调用大模型。
+
+向量检索和 BM25 用倒数排名融合，再用重排模型留下前几段。
+查询改写由 RAG_QUERY_REWRITE_LIMIT 控制，默认关闭。
+"""
 import json
 import re
 
@@ -57,6 +62,7 @@ def _rerank(question, candidates):
 
 
 def _hybrid_search(question, libraries):
+    # 两路各自取前若干名，再按名次加分。RRF_K 越大，第一名和后面几名的差距越小。
     try:
         qvec = embedder.embed_query(question)
         vector_hits = store.search(qvec, config.HYBRID_TOP_K, libraries)
@@ -92,6 +98,7 @@ def _source_label(item):
 
 
 def _has_grounded_evidence(question, top):
+    # SQLite 的 bm25() 越小越相关。词面重合用来挡住只撞上一个常见二字的假命中。
     vector_evidence = any((item.get("vector_score") or 0) >= config.MIN_VECTOR_SCORE for item in top)
     bm25_evidence = any(
         (item.get("bm25_score") or 0) < -0.05 and _lexical_score(question, item["text"]) >= 0.18
@@ -349,6 +356,7 @@ def _graph_rewrite(state):
 
 
 def _prompt_for_state(state):
+    # 只有续写同一组对话时才带入这组里的最近问题，新对话不借用其他话题。
     memory = db.get_memory(state["user_id"])
     conversation_id = state.get("conversation_id")
     recent = db.recent_answers(state["user_id"], 3, conversation_id) if conversation_id else []

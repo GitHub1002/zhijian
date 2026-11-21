@@ -1,3 +1,8 @@
+"""按 Markdown 标题切块，供向量库和全文索引共用。
+
+遇到 # 到 ###### 就结束上一节。一节超过 MAX_CHUNK_CHARS 时按整行再切，
+相邻块不重叠。块正文前会加上标题路径，回答时用它标出处。
+"""
 import re
 from pathlib import Path
 

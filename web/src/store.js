@@ -368,6 +368,7 @@ export async function ask() {
       bubble.error = data.detail || '未知错误'
       return
     }
+    // 拒答是一次 JSON。有依据时改为事件流：token 先显示，done 再补出处和剩余次数。
     const contentType = resp.headers.get('content-type') || ''
     if (!contentType.includes('text/event-stream')) {
       applyAnswer(bubble, await resp.json())

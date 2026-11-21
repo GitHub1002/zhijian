@@ -47,6 +47,7 @@ EXTENSION_CONFIGS = {
 
 
 def render(text):
+    # 模型输出和文档预览都会经过这里，脚本和事件属性会被去掉。
     html = markdown.markdown(
         text or "",
         extensions=EXTENSIONS,

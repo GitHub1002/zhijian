@@ -259,6 +259,7 @@ export default {
           </section>
         </div>
       </main>
+      <!-- 选择框只列出 Markdown。服务端只保存 .md，其他格式会被静默跳过。 -->
       <input ref="fileInput" type="file" multiple accept=".md,.markdown" hidden @change="onUpload">
     </template>
     <doc-modal></doc-modal>

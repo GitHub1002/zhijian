@@ -25,6 +25,8 @@ SESSION_COOKIE = "kb_session"
 SESSION_SECURE = os.getenv("SESSION_SECURE", "0").lower() in {"1", "true", "yes"}
 
 COLLECTION_NAME = "knowledge_docs"
+# 混合检索先各取 HYBRID_TOP_K 条，融合后再重排，最后只把 RERANK_TOP_K 段交给模型。
+# MIN_VECTOR_SCORE 是余弦相似度门槛。改写次数限制在 0 或 1，默认不改写。
 TOP_K = int(os.getenv("TOP_K", "5"))
 HYBRID_TOP_K = int(os.getenv("HYBRID_TOP_K", "12"))
 RRF_K = int(os.getenv("RRF_K", "60"))

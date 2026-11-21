@@ -44,6 +44,7 @@ def generate(system_prompt, user_prompt):
 
 
 def generate_stream(system_prompt, user_prompt):
+    # 只在检索已经确认有依据之后使用。拒答仍一次性返回，不走这里。
     client = get_client()
     stream = client.chat.completions.create(
         model=config.DEEPSEEK_MODEL,

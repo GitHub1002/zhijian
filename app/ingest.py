@@ -5,6 +5,7 @@ from qdrant_client.models import PointStruct
 
 from . import chunker, config, db, embedder, store
 
+# 文档属于哪个库，只看相对 docs/ 的第一段目录名。对不上的目录归入运营库。
 LIBRARY_DIRS = {
     "运维": "ops", "ops": "ops", "it": "ops",
     "人工智能": "ai", "ai": "ai", "AI知识": "ai",

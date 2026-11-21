@@ -7,6 +7,7 @@ _client = None
 
 
 def get_client():
+    # 本地目录模式同一时间只能有一个进程打开，否则会锁住 data/qdrant。
     global _client
     if _client is None:
         _client = QdrantClient(path=config.QDRANT_PATH)

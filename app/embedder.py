@@ -12,6 +12,7 @@ def get_model():
     return _model
 
 
+# bge 对查询和正文使用不同前缀：入库用 embed，检索必须用 query_embed。
 def embed_documents(texts):
     model = get_model()
     return [list(v) for v in model.embed(texts)]

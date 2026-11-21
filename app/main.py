@@ -302,6 +302,7 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
         prepared["quota"] = db.quota_status(user["id"])
         return prepared
 
+    # 到这里检索和拒答都已结束。下面只把有依据的回答逐段推给页面，流结束后才扣次数。
     def events():
         parts = []
         try:
@@ -493,6 +494,7 @@ async def upload_docs(files: list[UploadFile] = File(...), dir: str = Form(""), 
     uploaded = []
     for f in files:
         name = Path(f.filename or "").name
+        # 只保存 .md。选择框里能看到的 .markdown，以及 docx、pdf，都会被跳过且不报错。
         if not name or not name.lower().endswith(".md"):
             continue
         dest = target_dir / name

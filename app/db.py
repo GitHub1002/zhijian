@@ -17,6 +17,7 @@ PERMISSION_CATALOG = (
     {"key": "hr", "name": "HR", "description": "人事制度、招聘、培训与员工服务资料"},
 )
 PERMISSION_KEYS = {item["key"] for item in PERMISSION_CATALOG}
+# 全员可读，不出现在可申请目录里，提问时也不计入每日次数。
 COMMON_LIBRARY = "common"
 
 
@@ -25,6 +26,7 @@ def _now():
 
 
 def _today():
+    # 每日次数按东八区自然日计算，不跟 UTC 日期走。
     return (datetime.now(timezone.utc) + timedelta(hours=8)).date().isoformat()
 
 
@@ -341,6 +343,7 @@ def consume_quota(user_id):
 
 
 def create_answer(user_id, question, answer, sources_json, conversation_id=None):
+    """保存一条问答。未指定对话时按问题新建一组；指定的对话必须属于该用户。"""
     now = _now()
     with _connect() as conn:
         if conversation_id is None:
@@ -610,6 +613,7 @@ def approved_permissions(user_id):
         row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             return []
+        # 管理员拥有全部业务库。函数返回前会再给每个登录用户补上全员库。
         if row["role"] == "admin":
             keys = set(PERMISSION_KEYS)
         else:
