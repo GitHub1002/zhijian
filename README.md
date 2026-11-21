@@ -108,7 +108,7 @@ python -m scripts.ingest
 - 同一台机器只运行一个服务进程。本地 Qdrant 和 SQLite 不能被第二个进程同时打开。
 - 定期复制 `data/knowledge.db`。`data/qdrant/` 可以不备份，文档还在时重新执行 `python -m scripts.ingest` 即可恢复索引。
 - 服务放在内网 HTTPS 反向代理后面时，把 `.env` 里的 `SESSION_SECURE` 设为 `1`。本机用 HTTP 调试时保持 `0`。
-- `docs/common/` 里的公司简介登录后即可阅读，不必申请权限。`docs/股票知识`、`docs/游戏开发文档`、`docs/公司招聘`、`docs/AI知识`、`docs/测试`、`docs/测试目录`、`docs/测试上传目录` 只留在仓库里，不进入索引。
+- `docs/` 下的 Markdown、TXT、Word 和 PDF 都会进入索引。检索时按知识库权限过滤：`AI知识` 归人工智能库，`公司招聘` 归 HR，`游戏开发文档` 归开发库，`股票知识` 和名称未单独映射的测试目录归运营库。`docs/common/` 登录后即可阅读和检索，不必申请权限。
 
 ## 项目结构
 

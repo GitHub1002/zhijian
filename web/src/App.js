@@ -2,7 +2,7 @@ import { onMounted, onBeforeUnmount, ref } from 'vue'
 import DocTree from './components/DocTree.js'
 import ChatPane from './components/ChatPane.js'
 import { ToastStack, ConfirmDialog, DocModal, AdminModal, PermissionModal, ProfileModal, HelpModal } from './components/Dialogs.js'
-import { state, boot, submitAuth, logout, notify, askDialog, docCount, openDoc, deleteDoc, uploadFiles, syncDir, ingest, openConversation, deleteConversation, startNewConversation, openPermissions, openAdmin, displayName, initials } from './store.js'
+import { state, boot, submitAuth, logout, notify, askDialog, docCount, openDoc, deleteDoc, uploadFiles, uploadLibraries, loadDocs, syncDir, ingest, openConversation, deleteConversation, startNewConversation, openPermissions, openAdmin, displayName, initials } from './store.js'
 import { formatConversationTime } from './editor.js'
 
 export default {
@@ -75,16 +75,24 @@ export default {
       const files = [...(event.target.files || [])]
       event.target.value = ''
       if (!files.length) return
+      await loadDocs()
+      const options = uploadLibraries()
+      if (!options.length) {
+        notify('还没有可上传的知识库。请先申请权限，管理员通过后再上传。', 'warn')
+        return
+      }
+      const preferred = options.find(item => item.value !== 'common') || options[0]
       const dir = await askDialog({
-        mode: 'prompt',
+        mode: 'select',
         eyebrow: 'UPLOAD',
-        title: '上传到哪个目录',
-        message: `已选择 ${files.length} 个文件。支持 Markdown、TXT、Word（.docx）和 PDF。填写目标目录名，留空则放在文档库根目录。`,
-        inputLabel: '目录（可选）',
-        placeholder: '如：hr',
+        title: '上传到哪个知识库',
+        message: `已选择 ${files.length} 个文件。支持 Markdown、TXT、Word（.docx）和 PDF。文件会归入所选知识库，并立刻写入检索。`,
+        inputLabel: '知识库',
+        options,
+        value: preferred.value,
         okLabel: '开始上传',
       })
-      if (dir === null) return
+      if (!dir) return
       await uploadFiles(files, dir)
     }
 

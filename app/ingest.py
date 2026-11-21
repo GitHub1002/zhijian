@@ -14,10 +14,8 @@ LIBRARY_DIRS = {
     "HR": "hr", "hr": "hr", "公司招聘": "hr",
     "common": "common",
 }
-# 这些目录留在仓库里作样例，不进入向量库和全文索引。
-SKIP_INDEX_DIRS = {
-    "股票知识", "游戏开发文档", "公司招聘", "AI知识", "测试", "测试目录", "测试上传目录",
-}
+# 不再按目录排除。docs 下受支持的文件都会入库，检索时按知识库权限过滤。
+SKIP_INDEX_DIRS = set()
 
 
 def library_for_source(source):

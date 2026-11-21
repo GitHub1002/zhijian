@@ -17,24 +17,53 @@ export const ToastStack = {
 export const ConfirmDialog = {
   setup() {
     const input = ref('')
+    const selected = ref('')
+    const menuOpen = ref(false)
     const hasInput = computed(() => state.dialog?.mode === 'prompt')
-    function finish(ok) {
-      const value = hasInput.value ? input.value.trim() : true
+    const hasSelect = computed(() => state.dialog?.mode === 'select')
+    const selectedLabel = computed(() => {
+      const options = state.dialog?.options || []
+      return options.find(item => item.value === selected.value)?.label || '请选择'
+    })
+    watch(() => state.dialog, (dialog) => {
       input.value = ''
+      menuOpen.value = false
+      selected.value = dialog?.value || dialog?.options?.[0]?.value || ''
+    })
+    function chooseLibrary(value) {
+      selected.value = value
+      menuOpen.value = false
+    }
+    function finish(ok) {
+      const value = hasSelect.value ? selected.value : (hasInput.value ? input.value.trim() : true)
+      input.value = ''
+      menuOpen.value = false
       closeDialog(ok, ok ? value : null)
     }
-    return { state, hasInput, input, finish }
+    return { state, hasInput, hasSelect, input, selected, selectedLabel, menuOpen, chooseLibrary, finish }
   },
   template: `
     <div v-if="state.dialog" class="modal-overlay" style="display:flex" @click.self="finish(false)">
       <div class="modal" role="dialog" aria-modal="true" style="max-width:33rem">
-        <div class="modal-header"><div><span class="modal-eyebrow">{{ state.dialog.eyebrow || (hasInput ? 'INPUT' : 'CONFIRM') }}</span><span>{{ state.dialog.title || '请确认' }}</span></div></div>
+        <div class="modal-header"><div><span class="modal-eyebrow">{{ state.dialog.eyebrow || (hasInput || hasSelect ? 'INPUT' : 'CONFIRM') }}</span><span>{{ state.dialog.title || '请确认' }}</span></div></div>
         <div class="modal-body">
-          <p class="admin-copy" :style="hasInput ? '' : 'margin-bottom:0'">{{ state.dialog.message }}</p>
+          <p class="admin-copy" :style="hasInput || hasSelect ? '' : 'margin-bottom:0'">{{ state.dialog.message }}</p>
           <label v-if="hasInput" class="field" style="margin-top:1rem;display:block">
             <span>{{ state.dialog.inputLabel || '内容' }}</span>
             <input v-model="input" type="text" :placeholder="state.dialog.placeholder || ''" @keydown.enter.prevent="finish(true)">
           </label>
+          <div v-if="hasSelect" class="field library-field">
+            <span>{{ state.dialog.inputLabel || '知识库' }}</span>
+            <div class="library-select">
+              <button type="button" class="library-select-btn" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">
+                <span>{{ selectedLabel }}</span>
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6.2 8 10.2 12 6.2"/></svg>
+              </button>
+              <div v-if="menuOpen" class="library-select-menu" role="listbox">
+                <button v-for="item in state.dialog.options" :key="item.value" type="button" class="library-select-item" :class="{ active: item.value === selected }" role="option" :aria-selected="item.value === selected" @click="chooseLibrary(item.value)">{{ item.label }}</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="toolbar-btn" type="button" @click="finish(false)">{{ state.dialog.cancelLabel || '取消' }}</button>

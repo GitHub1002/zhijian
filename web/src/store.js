@@ -17,6 +17,7 @@ export const state = reactive({
   viewDoc: false,
   userMenu: false,
   tree: { dirs: [], files: [] },
+  libraries: [],
   docQuery: '',
   currentPath: '',
   currentContent: '',
@@ -151,6 +152,18 @@ export async function saveProfile(body) {
 export async function loadDocs() {
   const data = await api('/api/docs')
   state.tree = data.tree || { dirs: [], files: [] }
+  state.libraries = data.libraries || []
+}
+
+export function uploadLibraries() {
+  const options = []
+  if (state.user?.role === 'admin') options.push({ value: 'common', label: '全员' })
+  for (const item of state.libraries) {
+    if (item.status === 'approved' && item.permission_key) {
+      options.push({ value: item.permission_key, label: item.name || item.permission_key })
+    }
+  }
+  return options
 }
 
 export async function openDoc(path, anchor = '') {
