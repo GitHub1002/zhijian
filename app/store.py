@@ -7,7 +7,9 @@ _client = None
 
 
 def get_client():
-    # 本地目录模式同一时间只能有一个进程打开，否则会锁住 data/qdrant。
+    # Qdrant local 模式在进程内读写 data/qdrant，同一时间只允许一个进程打开。
+    # 因此 uvicorn 只能用单 worker；要多进程或多实例部署必须换成 Qdrant server。
+    # 进程内的 _client 单例同时避免重复打开文件锁。
     global _client
     if _client is None:
         _client = QdrantClient(path=config.QDRANT_PATH)
@@ -30,6 +32,7 @@ def upsert(points):
 
 
 def search(query_vector, top_k, libraries=None):
+    # library 过滤在 Qdrant 侧完成，无权限的片段不会进入候选集。
     client = get_client()
     ensure_collection()
     query_filter = None
@@ -57,6 +60,7 @@ def delete_source(source):
 
 
 def replace_source(source, points):
+    # 先按 source 删除再插入，保证文档删改后不残留旧片段。
     delete_source(source)
     if points:
         upsert(points)

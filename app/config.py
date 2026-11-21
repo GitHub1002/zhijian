@@ -3,6 +3,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+# HuggingFace 镜像和下载开关：国内或内网环境默认走 hf-mirror，
+# 避免首次加载嵌入模型时连接官方源超时。
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
@@ -27,6 +29,8 @@ SESSION_SECURE = os.getenv("SESSION_SECURE", "0").lower() in {"1", "true", "yes"
 COLLECTION_NAME = "knowledge_docs"
 # 混合检索先各取 HYBRID_TOP_K 条，融合后再重排，最后只把 RERANK_TOP_K 段交给模型。
 # MIN_VECTOR_SCORE 是余弦相似度门槛。改写次数限制在 0 或 1，默认不改写。
+# RRF_K=60 是常用经验值；MIN_VECTOR_SCORE 针对 bge-small-zh 的相似度分布，
+# 更换嵌入模型后需要重新标定。
 TOP_K = int(os.getenv("TOP_K", "5"))
 HYBRID_TOP_K = int(os.getenv("HYBRID_TOP_K", "12"))
 RRF_K = int(os.getenv("RRF_K", "60"))
@@ -36,6 +40,7 @@ RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 MIN_VECTOR_SCORE = float(os.getenv("MIN_VECTOR_SCORE", "0.35"))
 RAG_QUERY_REWRITE_LIMIT = max(0, min(int(os.getenv("RAG_QUERY_REWRITE_LIMIT", "0")), 1))
 
+# 相对路径统一按项目根目录解析，保证从任何工作目录启动都能找到 data/ 和 docs/。
 QDRANT_PATH = (BASE_DIR / QDRANT_PATH) if not os.path.isabs(QDRANT_PATH) else Path(QDRANT_PATH)
 DOCS_DIR = (BASE_DIR / DOCS_DIR) if not os.path.isabs(DOCS_DIR) else Path(DOCS_DIR)
 DB_PATH = (BASE_DIR / DB_PATH) if not os.path.isabs(DB_PATH) else Path(DB_PATH)

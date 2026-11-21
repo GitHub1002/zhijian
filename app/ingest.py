@@ -19,6 +19,9 @@ SKIP_INDEX_DIRS = set()
 
 
 def library_for_source(source):
+    # 只认 docs/ 下第一段目录名；未知目录默认归入运营库。
+    # 新增知识库时，LIBRARY_DIRS 和 db.PERMISSION_CATALOG 必须同时修改，
+    # 否则文档能入库但用户无法申请对应权限。
     first = Path(source).parts[0] if Path(source).parts else ""
     return LIBRARY_DIRS.get(first, "ops_business")
 
@@ -38,6 +41,8 @@ def _build_points(source, content):
     texts = [c["text"] for c in chunks]
     vectors = embedder.embed_documents(texts)
     for c, vec in zip(chunks, vectors):
+        # chunk_id 由 source、heading 和正文前 200 字决定。
+        # 内容不变则 id 不变，重新入库会覆盖旧点；正文前 200 字改动才会生成新 id。
         cid = hashlib.md5(f"{source}::{c['heading']}::{c['text'][:200]}".encode()).hexdigest()
         c = {**c, "id": cid, "library": library}
         enriched.append(c)
@@ -58,6 +63,8 @@ def _build_points(source, content):
 
 
 def run_ingest():
+    # 全量重建：按文件替换向量和 FTS，最后删除磁盘上已不存在的 source。
+    # 单个文件提取失败时跳过并保留旧索引（见下面 except），避免一次坏文件清空全库。
     doc_files = documents.iter_files(config.DOCS_DIR)
     all_chunks = []
     all_sources = set()

@@ -2,6 +2,8 @@
 
 在线新建和编辑仍只针对 Markdown 与 TXT。Word、PDF 按原文件保存，
 预览和检索使用提取出的文字。扫描版 PDF 没有文字层时无法读取。
+所有格式最终都会转成 Markdown 文本再交给 chunker；
+原始字节只在上传和同步时落盘，作为源文件保留，预览和检索都使用提取文本。
 """
 from io import BytesIO
 from pathlib import Path
@@ -67,6 +69,8 @@ def _heading_level(style_name):
 
 
 def _docx_to_markdown(raw):
+    # 按 body 的原始子元素顺序遍历，段落和表格不会互相错位。
+    # Word 标题依赖样式名（英文 Heading N / 中文“标题 N”），样式不规范时退化为普通段落。
     try:
         from docx import Document
         from docx.oxml.ns import qn
@@ -100,6 +104,8 @@ def _docx_to_markdown(raw):
 
 
 def _pdf_to_markdown(raw):
+    # 每页加“## 第 N 页”作为可引用标题；扫描版没有文字层时 extract_text 为空，
+    # 最终报“没有提取到文字”，而不是静默入库空文档。
     try:
         from pypdf import PdfReader
     except ImportError as exc:

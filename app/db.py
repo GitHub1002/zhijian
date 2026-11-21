@@ -1,3 +1,11 @@
+"""SQLite 持久化层。
+
+负责账号与会话、每日额度、对话与回答、反馈与学习记忆、权限申请，
+以及供 BM25 使用的文档切块索引。
+
+所有表由 init_db() 幂等创建；旧库通过 ALTER TABLE 补列，并在启动时回填对话。
+这里只存文本和元数据，向量不在这里——见 store.py。
+"""
 import hashlib
 import hmac
 import re
@@ -18,7 +26,11 @@ PERMISSION_CATALOG = (
 )
 PERMISSION_KEYS = {item["key"] for item in PERMISSION_CATALOG}
 # 全员可读，不出现在可申请目录里，提问时也不计入每日次数。
+# 写权限只给管理员，见 app/main.py 的 _require_write_library。
 COMMON_LIBRARY = "common"
+
+
+# ---- 时间与会话 ----
 
 
 def _now():
@@ -43,9 +55,12 @@ def _connect():
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_DB_PATH), timeout=15)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")   # 允许读写并发，减少“database is locked”
+    conn.execute("PRAGMA foreign_keys=ON")    # FK 是连接级开关，不设则 CASCADE 不生效
     return conn
+
+
+# ---- 启动建表与迁移 ----
 
 
 def init_db():
@@ -146,6 +161,8 @@ def init_db():
             );
             """
         )
+        # 以下是给老库补列、补数据的迁移。新库建表时已包含这些列，
+        # 所以每次启动都先查 PRAGMA table_info，保证重复执行安全。
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "role" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
@@ -202,7 +219,10 @@ def _fts_query(value):
 
 
 def _rebuild_fts_index(conn):
-    """search_chunks_fts 是派生索引，启动时重建以兼容旧版本索引。"""
+    """search_chunks_fts 是派生索引，启动时全量重建以兼容旧版本索引。
+
+    当前文档量下可接受，切块数量级上到万级时应改为增量维护。
+    """
     conn.execute("DELETE FROM search_chunks_fts")
     rows = conn.execute("SELECT chunk_id, source, title, heading, text, library FROM search_chunks").fetchall()
     conn.executemany(
@@ -217,6 +237,12 @@ def _rebuild_fts_index(conn):
 
 
 def _hash_password(password):
+    """PBKDF2-HMAC-SHA256，16 字节随机盐，310,000 次迭代。
+
+    存储格式：pbkdf2_sha256$迭代次数$盐$摘要。
+    迭代次数写进字符串而不是写死在校验逻辑里，这样以后提高参数，
+    旧密码仍然能按原次数校验。
+    """
     salt = secrets.token_bytes(16)
     iterations = 310_000
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
@@ -224,6 +250,8 @@ def _hash_password(password):
 
 
 def _verify_password(password, encoded):
+    # 用 compare_digest 而不是 ==，避免通过响应时间逐字节推断摘要。
+    # 任何格式错误都返回 False。
     try:
         algorithm, iterations, salt_hex, digest_hex = encoded.split("$", 3)
         if algorithm != "pbkdf2_sha256":
@@ -259,12 +287,14 @@ def create_user(username, password, role="user"):
 def authenticate(username, password):
     with _connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE username = ?", (username.strip(),)).fetchone()
+    # 用户不存在和密码错误都返回 None，调用方不能从结果区分这两种失败。
     if not row or not _verify_password(password, row["password_hash"]):
         return None
     return _user_dict(row, include_permissions=True)
 
 
 def create_session(user_id, days=14):
+    # token 本身就是凭据，数据库只存 token；过期后由 get_user_by_session 惰性删除。
     token = secrets.token_urlsafe(32)
     expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
     with _connect() as conn:
@@ -299,7 +329,11 @@ def delete_session(token):
             conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
 
 
+# ---- 额度 ----
+
+
 def quota_status(user_id):
+    """只读额度视图。管理员返回 unlimited，前端据此隐藏次数提示；扣减在 consume_quota。"""
     with _connect() as conn:
         user = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
     if user and user["role"] == "admin":
@@ -314,12 +348,18 @@ def quota_status(user_id):
 
 
 def consume_quota(user_id):
+    """扣一次每日额度。返回 None 表示今天已经用完。
+
+    管理员不计数，直接返回 unlimited。
+    """
     with _connect() as conn:
         user = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
     if user and user["role"] == "admin":
         return {"used": 0, "limit": None, "remaining": None, "unlimited": True}
     today = _today()
     with _connect() as conn:
+        # BEGIN IMMEDIATE 立即取写锁，让“读计数 → 判断 → 写入”成为一个原子事务。
+        # 否则两个并发请求可能同时读到 used=9，都通过检查，最终写成 11。
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT count FROM daily_usage WHERE user_id = ? AND usage_date = ?",
@@ -340,6 +380,9 @@ def consume_quota(user_id):
             )
     used += 1
     return {"used": used, "limit": config.DAILY_ASK_LIMIT, "remaining": config.DAILY_ASK_LIMIT - used}
+
+
+# ---- 对话、回答与反馈 ----
 
 
 def create_answer(user_id, question, answer, sources_json, conversation_id=None):
@@ -614,6 +657,7 @@ def approved_permissions(user_id):
         if not row:
             return []
         # 管理员拥有全部业务库。函数返回前会再给每个登录用户补上全员库。
+        # 调用方不必各自处理 common；业务库判断请用 business_permissions。
         if row["role"] == "admin":
             keys = set(PERMISSION_KEYS)
         else:
@@ -629,6 +673,7 @@ def approved_permissions(user_id):
 
 
 def business_permissions(user_id):
+    # 业务库决定是否扣每日额度：只有申请过业务库的用户才消耗次数，common 不计。
     return [key for key in approved_permissions(user_id) if key != COMMON_LIBRARY]
 
 
@@ -646,6 +691,8 @@ def permission_statuses(user_id):
             (user_id,),
         ).fetchall()
     result = [dict(row) for row in rows]
+    # 管理员在界面上统一显示为已通过，避免出现“管理员还要申请”的矛盾状态；
+    # 这里只改返回给前端的展示值，不动数据库里的历史申请记录。
     if user and user["role"] == "admin":
         for item in result:
             item["status"] = "approved"
@@ -672,6 +719,9 @@ def request_permission(user_id, permission_key):
     if permission_key not in PERMISSION_KEYS:
         return None
     with _connect() as conn:
+        # 重复申请时：已审批的记录保持 approved、原申请和审批时间不变；
+        # pending / rejected 会被重置为 pending 并刷新申请时间、清空审批信息。
+        # 如果简化成无脑 UPDATE，用户重新点一次“申请”就会丢掉已有权限。
         conn.execute(
             """INSERT INTO permission_requests(user_id, permission_key, status, requested_at)
                VALUES (?, ?, 'pending', ?)
@@ -774,6 +824,7 @@ def search_bm25(query, libraries, limit=20):
                WHERE search_chunks_fts MATCH ? AND c.library IN ({placeholders})
                ORDER BY bm25_score ASC LIMIT ?"""
     with _connect() as conn:
+        # 先多取 max(limit*4, 40)，因为下面的首尾锚点过滤会丢掉一部分，最后再截到 limit。
         rows = conn.execute(sql, [match, *libraries, max(limit * 4, 40)]).fetchall()
     rows = [dict(row) for row in rows]
     # 中文 FTS 使用二元词。要求命中查询首/尾锚点，避免“完全不存在的词”

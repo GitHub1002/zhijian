@@ -1,3 +1,4 @@
+"""命令行入口：python -m scripts.ingest，全量重建向量和全文索引。"""
 import sys
 from pathlib import Path
 

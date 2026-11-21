@@ -11,6 +11,8 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
 def _split_by_len(body):
+    # 只在超长时按整行切；单行本身超过上限时仍整体保留，
+    # 避免把表格行或长句切成难以阅读的碎片。
     if len(body) <= MAX_CHUNK_CHARS:
         return [body]
     parts = []
@@ -42,6 +44,8 @@ def split_markdown(text, source):
         body = "\n".join(buf).strip()
         if not body:
             return
+        # 前缀会进入正文，被嵌入和 BM25 一起索引。不要在这里加时间戳之类
+        # 每次都会变的内容，否则同一篇文档每次重建都会得到不同向量。
         for piece in _split_by_len(body):
             chunks.append(
                 {
@@ -58,6 +62,8 @@ def split_markdown(text, source):
             emit(buffer)
             buffer = []
             level = len(m.group(1))
+            # 维护从一级到当前级的标题路径：遇到同级或更高级标题时先弹栈，
+            # 因此每个块只归属一个明确的标题路径。
             while heading_stack and heading_stack[-1][0] >= level:
                 heading_stack.pop()
             heading_stack.append((level, m.group(2).strip()))

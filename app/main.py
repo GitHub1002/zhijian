@@ -1,3 +1,9 @@
+"""FastAPI 应用与 HTTP 层。
+
+负责路由、Cookie 会话、权限依赖、文档 CRUD/上传/同步，以及把 RAG 结果
+转成 JSON 或 SSE。业务规则尽量下沉到 db.py / rag.py，这里只做参数校验、
+权限判断和错误映射。
+"""
 import json
 import re
 import sqlite3
@@ -22,6 +28,7 @@ app = FastAPI(title="智检")
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
+# 请求体模型只做粗粒度的格式/长度校验；权限、路径和业务状态在路由里判断。
 class AuthRequest(BaseModel):
     username: str = Field(min_length=3, max_length=40)
     password: str = Field(min_length=6, max_length=128)
@@ -61,6 +68,8 @@ class ProfileRequest(BaseModel):
 
 
 def _set_session(response: Response, user_id: int):
+    # Cookie 只放随机 token；httponly 防脚本读取，samesite=lax 挡跨站 POST，
+    # 生产环境通过 SESSION_SECURE=1 加 Secure 标记。
     response.set_cookie(
         config.SESSION_COOKIE, db.create_session(user_id), httponly=True,
         samesite="lax", max_age=14 * 24 * 60 * 60, secure=config.SESSION_SECURE,
@@ -85,6 +94,8 @@ def _has_library(user, library):
 
 
 def _can_read_library(user, library):
+    # 读权限分两层：common 是全员库，任何登录用户可读；
+    # 业务库需要审批通过，或者角色是 admin。
     return library == db.COMMON_LIBRARY or _has_library(user, library)
 
 
@@ -94,6 +105,8 @@ def _require_library(user, library):
 
 
 def _require_write_library(user, library):
+    # common 是全员共享文档，只有管理员能改，避免普通用户覆盖公共内容。
+    # 业务库沿用普通权限判断。
     if library == db.COMMON_LIBRARY and user["role"] != "admin":
         raise HTTPException(status_code=403, detail="全员文档只有管理员可以修改")
     _require_library(user, library)
@@ -113,6 +126,7 @@ def index():
 
 @app.post("/api/auth/register")
 def register(req: AuthRequest, response: Response):
+    # 用户名白名单同时挡掉路径分隔符、空格和其他特殊字符；密码长度由 Pydantic 校验。
     username = req.username.strip()
     if not re.fullmatch(r"[A-Za-z0-9_\-\u4e00-\u9fff]{3,40}", username):
         raise HTTPException(status_code=400, detail="用户名需为 3-40 个字的中文、字母、数字、下划线或连字符")
@@ -158,6 +172,8 @@ def api_profile(user=Depends(current_user)):
 
 @app.post("/api/profile")
 def api_update_profile(req: ProfileRequest, user=Depends(current_user)):
+    # 名称和头像都是可选项，None 表示不修改；头像只接受 300KB 以内的
+    # png/jpeg/webp data URL，避免把任意 URL 或超大内容塞进数据库。
     if req.display_name is None and req.avatar is None:
         raise HTTPException(status_code=400, detail="没有要修改的内容")
     display_name = req.display_name
@@ -238,6 +254,7 @@ def admin_delete_user(user_id: int, admin=Depends(admin_user)):
 
 
 def _ask_error_detail(exc):
+    # 把上游异常翻译成可行动的中文，避免 SDK 堆栈或 Key 泄露到前端。
     if isinstance(exc, ValueError):
         return str(exc)
     if isinstance(exc, RuntimeError):
@@ -254,6 +271,8 @@ def _ask_error_detail(exc):
 
 
 def _raise_ask_error(exc):
+    # 状态码按“客户端可修复 / 上游故障”分开：404/400 是输入、配置或对话不存在，
+    # 502/503/504 是上游认证、限流或连接问题，其余按 500 兜底。
     if isinstance(exc, ValueError):
         raise HTTPException(status_code=404, detail=_ask_error_detail(exc))
     if isinstance(exc, RuntimeError):
@@ -270,6 +289,7 @@ def _raise_ask_error(exc):
 
 
 def _sse(payload, event=None):
+    # SSE 事件以空行结束；data 只放单行 JSON，前端按 \n\n 切包。
     lines = []
     if event:
         lines.append(f"event: {event}")
@@ -279,6 +299,16 @@ def _sse(payload, event=None):
 
 @app.post("/api/ask")
 def api_ask(req: AskRequest, user=Depends(current_user)):
+    """问答入口，返回 JSON 或 SSE。
+
+    顺序是刻意的：
+    0) 先做只读的额度预检查，超限直接 429，不进入检索；
+    1) 再 prepare：完成授权、检索、证据判断。拒答直接作为普通 JSON 返回，
+       不进入生成阶段，也不扣次数；若开启查询改写，检索阶段仍可能调用一次
+       模型做改写，但不会生成回答；
+    2) 只有确认可以生成时才创建事件流，逐 token 推给页面；
+    3) 生成结束后才 consume_quota，避免模型报错把次数吃掉。
+    """
     question = req.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题不能为空")
@@ -327,6 +357,8 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
 
 @app.post("/api/feedback")
 def feedback(req: FeedbackRequest, user=Depends(current_user)):
+    # 低分必须填原因；唯一约束保证一条回答只能评价一次。
+    # learn_from_feedback 只吞掉模型调用异常并写入兜底策略；数据库异常仍会让请求失败。
     reason = req.reason.strip()
     if req.rating < 5 and len(reason) < 10:
         raise HTTPException(status_code=422, detail="5 星以下请填写至少 10 个字符的原因")
@@ -390,6 +422,8 @@ def api_delete_conversation(conversation_id: int, user=Depends(current_user)):
 
 
 def _doc_tree(user):
+    # 按权限裁剪文档树；一个目录下没有可见文件时整枝隐藏，
+    # 避免通过目录名推测知识库结构。
     docs_dir = Path(config.DOCS_DIR)
     docs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -417,6 +451,10 @@ def api_docs(user=Depends(current_user)):
 
 @app.get("/api/doc/{path:path}")
 def api_doc(path: str, user=Depends(current_user)):
+    # 检查顺序：路径必须留在 docs/ 内，然后确认文件存在且后缀受支持，最后查读权限。
+    # 不存在返回 404、无权限返回 403，因此调用方能区分文件是否存在；
+    # 若要避免泄露存在性，应先按路径判断知识库读权限。
+    # 返回提取后的文本和渲染 HTML，不把原始二进制直接交给浏览器。
     docs_dir = Path(config.DOCS_DIR).resolve()
     full = (docs_dir / path).resolve()
     if not full.is_relative_to(docs_dir) or not full.exists() or not documents.is_supported(full.suffix):
@@ -448,6 +486,8 @@ def _resolve_doc(path):
 
 @app.post("/api/doc")
 def create_doc(req: DocRequest, user=Depends(current_user)):
+    # 在线新建只产生 Markdown。先判断“目录存在但无权限”，再判断“文档已存在”，
+    # 避免对无权限用户返回 409，从而泄露具体文件名是否已被占用。
     path = req.path.strip().strip("/")
     if not path:
         raise HTTPException(status_code=400, detail="路径不能为空")
@@ -494,6 +534,11 @@ def delete_doc(path: str, _admin=Depends(admin_user)):
 
 @app.post("/api/upload")
 async def upload_docs(files: list[UploadFile] = File(...), dir: str = Form(""), user=Depends(current_user)):
+    # 上传有三道边界：
+    # 1) 文件名只取 basename，丢掉客户端可能带上的目录；
+    # 2) 目标目录 resolve 后必须仍在 docs/ 内，防 ../ 穿越；
+    # 3) 落盘保存原始字节作为源文件，入库使用提取出的文本（当前没有原始文件下载接口）。
+    # 普通用户只能新建、不能覆盖；管理员可以覆盖同名文件。
     docs_dir = Path(config.DOCS_DIR).resolve()
     target_dir = docs_dir
     if dir.strip():
@@ -528,6 +573,8 @@ async def upload_docs(files: list[UploadFile] = File(...), dir: str = Form(""), 
 
 @app.post("/api/sync")
 def sync_dir(req: SyncRequest, _admin=Depends(admin_user)):
+    # 复制并立即索引，源目录不受影响。提取失败或路径非法的文件记入 skipped；
+    # 其他 I/O 或索引异常会直接中断本次同步。
     source = Path(req.source_dir.strip()).resolve()
     if not source.exists() or not source.is_dir():
         raise HTTPException(status_code=400, detail="源目录不存在")

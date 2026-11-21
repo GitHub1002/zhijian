@@ -13,6 +13,7 @@ _PROMPT_TEMPLATE = ChatPromptTemplate.from_messages(
 
 
 def get_client():
+    # 进程内单例。API Key 在 config 导入时读取，修改 .env 后需要重启服务。
     global _client
     if _client is None:
         _client = OpenAI(api_key=config.DEEPSEEK_API_KEY, base_url=config.DEEPSEEK_BASE_URL)
@@ -45,6 +46,7 @@ def generate(system_prompt, user_prompt):
 
 def generate_stream(system_prompt, user_prompt):
     # 只在检索已经确认有依据之后使用。拒答仍一次性返回，不走这里。
+    # 不处理异常，由 main.api_ask 转成 SSE error 事件；空 choices 是正常结束帧。
     client = get_client()
     stream = client.chat.completions.create(
         model=config.DEEPSEEK_MODEL,

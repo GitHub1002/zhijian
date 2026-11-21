@@ -8,6 +8,8 @@ import re
 
 from . import config, db, embedder, llm, md_render, store
 
+# 提示词是行为约束的一部分：只允许引用给定编号，证据不足必须拒答。
+# 修改时要同步 README 里的“反幻觉”说明。
 SYSTEM_PROMPT = (
     "你是一个企业内部知识库助手。只能使用参考资料回答，不能使用常识补充或猜测。"
     "如果参考资料不足以回答问题，必须直接回复‘当前授权知识库没有足够依据，暂不作答，请申请对应知识库权限或联系管理员。’。"
@@ -19,6 +21,7 @@ _RERANKER = None
 
 
 def _get_reranker():
+    # 重排模型较大，首次使用时懒加载；加载失败记为 False，后续请求直接走词面兜底。
     global _RERANKER
     if _RERANKER is not None or not config.RERANK_ENABLED:
         return _RERANKER
@@ -31,6 +34,7 @@ def _get_reranker():
 
 
 def _lexical_score(question, text):
+    # 中文按二元组、英文数字按整词算重合率；只用于证据判断和重排兜底，不是 BM25 分数。
     def terms(value):
         value = value.lower()
         cjk = "".join(re.findall(r"[\u4e00-\u9fff]", value))
@@ -56,6 +60,7 @@ def _rerank(question, candidates):
         except Exception:
             reranker = False
     if not reranker:
+        # 兜底分 = 词面重合 + RRF，与模型分不可跨批比较；这里只用于同一批候选内部排序。
         for item in candidates:
             item["rerank_score"] = _lexical_score(question, item["text"]) + item.get("rrf_score", 0.0)
     return sorted(candidates, key=lambda item: item.get("rerank_score", 0), reverse=True)
@@ -99,6 +104,11 @@ def _source_label(item):
 
 def _has_grounded_evidence(question, top):
     # SQLite 的 bm25() 越小越相关。词面重合用来挡住只撞上一个常见二字的假命中。
+    # 具体门槛：
+    # - 向量侧：余弦相似度 >= MIN_VECTOR_SCORE（默认 0.35，按 bge-small-zh 标定）；
+    # - BM25 侧：bm25() < -0.05 且查询词覆盖率 >= 0.18，两个条件必须同时满足，
+    #   单独一个很弱的相关性不算证据。
+    # 换嵌入模型或分词方式后，这三个阈值都需要重新标定。
     vector_evidence = any((item.get("vector_score") or 0) >= config.MIN_VECTOR_SCORE for item in top)
     bm25_evidence = any(
         (item.get("bm25_score") or 0) < -0.05 and _lexical_score(question, item["text"]) >= 0.18
@@ -108,7 +118,7 @@ def _has_grounded_evidence(question, top):
 
 
 def _rewrite_query(question):
-    """Return one bounded retrieval-only query rewrite; never generate an answer here."""
+    """只返回一条检索查询，不在这里生成回答。失败或和原问题相同则返回空字符串。"""
     try:
         rewritten = llm.generate(
             "你是企业知识库检索查询改写器。只输出一条简短、保留原意的检索查询；"
@@ -138,6 +148,7 @@ def _retrieval_metrics(libraries, ranked, top, query_rewrites=0):
 
 
 def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_id=None):
+    # 拒答也写入 answers，保证历史对话完整；sources 为空、grounded=False。
     messages = {
         "no_approved_permission": (
             "当前账号还没有任何已审批的知识库权限，暂不作答。"
@@ -160,6 +171,7 @@ def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_
 
 
 def _ask_legacy(question, user_id):
+    # langgraph 不可用时的兼容路径。检索、拒答和来源锚点要与 _graph_ground 保持一致。
     libraries = db.approved_permissions(user_id)
     if not libraries:
         return _refusal(question, user_id, [], "no_approved_permission")
@@ -182,6 +194,7 @@ def _ask_legacy(question, user_id):
     context_parts = []
     for index, item in enumerate(top, start=1):
         last = item.get("heading", "").split(" > ")[-1] if item.get("heading") else ""
+        # anchor 规则同 _graph_ground：必须与 md_render 的 toc slugify 一致。
         anchor = md_render.slugify(last) if last else ""
         sources.append({
             "index": index, "source": item["source"], "heading": item.get("heading", ""),
@@ -313,6 +326,8 @@ def _graph_ground(state):
     context_parts = []
     for index, item in enumerate(top, start=1):
         last = item.get("heading", "").split(" > ")[-1] if item.get("heading") else ""
+        # anchor 取标题路径的最后一段，并复用 md_render.slugify。
+        # 前端按这个 id 在重新渲染的文档里找标题，必须和 toc 扩展的 slugify 一致。
         anchor = md_render.slugify(last) if last else ""
         sources.append({
             "index": index,
@@ -356,6 +371,7 @@ def _graph_rewrite(state):
 
 
 def _prompt_for_state(state):
+    # 策略摘要只影响语气和完整度，不能作为事实来源；提示词里已写明“不可覆盖资料事实”。
     # 只有续写同一组对话时才带入这组里的最近问题，新对话不借用其他话题。
     memory = db.get_memory(state["user_id"])
     conversation_id = state.get("conversation_id")
@@ -371,7 +387,13 @@ def _prompt_for_state(state):
 
 
 def prepare(question, user_id, conversation_id=None):
-    """完成授权、检索和证据判断。拒答直接返回结果；可以生成时带上 ready。"""
+    """完成授权、检索和证据判断，返回可生成回答的 state。
+
+    返回有两种形态：
+    - 拒答：包含完整 result 和 grounded=False，HTTP 层直接作为 JSON 返回；
+    - 可生成：ready=True，带 user_prompt，由调用方流式生成后再调用 persist_prepared。
+    这样 HTTP 层不需要再理解检索细节。
+    """
     state = {"question": question, "user_id": user_id, "conversation_id": conversation_id}
     state.update(_graph_authorize(state))
     if state.get("stop"):
@@ -398,6 +420,8 @@ def prepare(question, user_id, conversation_id=None):
 
 
 def persist_prepared(state, answer):
+    # 与 prepare 配对：生成结束后统一落库并组装 answer_html/sources/retrieval。
+    # 流式接口必须在发送 done 之前调用，保证前端拿到的 answer_id 可以评价。
     return _graph_persist({**state, "answer": answer})["result"]
 
 
@@ -447,6 +471,7 @@ def _route_after_rewrite(state):
 
 
 def _build_rag_graph():
+    # 开启改写时形成 ground → rewrite → retrieve 的回边，回边次数由 rewrite_count 限制。
     if StateGraph is None:
         return None
     try:
