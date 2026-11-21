@@ -3,7 +3,7 @@ from pathlib import Path
 
 from qdrant_client.models import PointStruct
 
-from . import chunker, config, db, embedder, store
+from . import chunker, config, db, documents, embedder, store
 
 # 文档属于哪个库，只看相对 docs/ 的第一段目录名。对不上的目录归入运营库。
 LIBRARY_DIRS = {
@@ -60,15 +60,19 @@ def _build_points(source, content):
 
 
 def run_ingest():
-    md_files = sorted(Path(config.DOCS_DIR).rglob("*.md"))
+    doc_files = documents.iter_files(config.DOCS_DIR)
     all_chunks = []
     all_sources = set()
-    for f in md_files:
+    for f in doc_files:
         rel = f.relative_to(config.DOCS_DIR).as_posix()
         if not indexable(rel):
             continue
         all_sources.add(rel)
-        text = f.read_text(encoding="utf-8")
+        try:
+            text = documents.extract_bytes(f.name, f.read_bytes())
+        except documents.ExtractError:
+            # 读不出来时保留已有索引，避免一次坏文件把原来的片段清掉。
+            continue
         points, chunks = _build_points(rel, text)
         all_chunks.extend(chunks)
         store.replace_source(rel, points)
@@ -79,7 +83,7 @@ def run_ingest():
     for source in stale:
         db.delete_search_source(source)
         store.delete_source(source)
-    return {"files": len(md_files), "chunks": len(all_chunks)}
+    return {"files": len(doc_files), "chunks": len(all_chunks)}
 
 
 def ingest_one(source, content):

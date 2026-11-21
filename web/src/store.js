@@ -21,6 +21,7 @@ export const state = reactive({
   currentPath: '',
   currentContent: '',
   docHtml: '',
+  docEditable: true,
   conversations: [],
   conversationId: null,
   conversationTitle: '',
@@ -157,6 +158,7 @@ export async function openDoc(path, anchor = '') {
   state.currentPath = path
   state.currentContent = data.content || ''
   state.docHtml = data.html || ''
+  state.docEditable = data.editable !== false
   state.sidebarTab = 'docs'
   if (window.matchMedia('(max-width: 1023px)').matches) {
     state.viewDoc = true
@@ -227,8 +229,14 @@ export async function uploadFiles(files, dir) {
   form.append('dir', dir || '')
   try {
     const data = await api('/api/upload', { method: 'POST', body: form })
-    notify(`已上传 ${data.uploaded.length} 个文档`, 'success')
-    await loadDocs()
+    const skipped = data.skipped || []
+    if (data.uploaded.length) {
+      const extra = skipped.length ? `，另有 ${skipped.length} 个未收入` : ''
+      notify(`已上传 ${data.uploaded.length} 个文档${extra}`, skipped.length ? 'warn' : 'success')
+      await loadDocs()
+    } else {
+      notify(skipped.map(item => `${item.name}：${item.reason}`).join('；') || '没有可上传的文档', 'warn')
+    }
   } catch (error) {
     notify('上传失败：' + error.message, 'error')
   }
@@ -237,7 +245,8 @@ export async function uploadFiles(files, dir) {
 export async function syncDir(source) {
   try {
     const data = await api('/api/sync', { method: 'POST', body: JSON.stringify({ source_dir: source }) })
-    notify(`已同步 ${data.count} 个文档`, 'success')
+    const extra = data.skipped && data.skipped.length ? `，另有 ${data.skipped.length} 个未收入` : ''
+    notify(`已同步 ${data.count} 个文档${extra}`, extra ? 'warn' : 'success')
     await loadDocs()
   } catch (error) {
     notify('同步失败：' + error.message, 'error')

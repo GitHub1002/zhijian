@@ -337,7 +337,7 @@ export const HelpModal = {
       <div class="modal" role="dialog" aria-modal="true" style="max-width:33rem">
         <div class="modal-header"><div><span class="modal-eyebrow">HELP</span><span>使用说明</span></div></div>
         <div class="modal-body">
-          <p class="admin-copy" style="margin-bottom:0">左侧可以在文档和历史对话之间切换。点开历史里的一条，就能看到当时的回答和出处。中间输入框按回车发送，Shift + 回车换行。回答下方的出处可以跳到原文。如果某类资料看不到，点右上角「我的权限」申请，管理员审批后即可使用。</p>
+          <p class="admin-copy" style="margin-bottom:0">左侧可以在文档和历史对话之间切换。上传支持 Markdown、TXT、Word（.docx）和 PDF；在线新建和编辑仍是 Markdown。点开历史里的一条，就能看到当时的回答和出处。中间输入框按回车发送，Shift + 回车换行。回答下方的出处可以跳到原文。如果某类资料看不到，点右上角「我的权限」申请，管理员审批后即可使用。</p>
         </div>
         <div class="modal-footer"><button class="primary-btn" type="button" @click="state.helpOpen = false">知道了</button></div>
       </div>

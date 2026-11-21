@@ -79,7 +79,7 @@ export default {
         mode: 'prompt',
         eyebrow: 'UPLOAD',
         title: '上传到哪个目录',
-        message: `已选择 ${files.length} 个 Markdown 文件。填写目标目录名，留空则放在文档库根目录。`,
+        message: `已选择 ${files.length} 个文件。支持 Markdown、TXT、Word（.docx）和 PDF。填写目标目录名，留空则放在文档库根目录。`,
         inputLabel: '目录（可选）',
         placeholder: '如：hr',
         okLabel: '开始上传',
@@ -93,7 +93,7 @@ export default {
         mode: 'prompt',
         eyebrow: 'SYNC DIRECTORY',
         title: '同步本地目录',
-        message: '填写本机上存放 Markdown 的目录绝对路径。该目录下的 .md 文件会被复制进知识库，原目录不受影响。',
+        message: '填写本机目录的绝对路径。该目录下的 Markdown、TXT、Word（.docx）和 PDF 会被复制进知识库，原目录不受影响。',
         inputLabel: '目录路径',
         placeholder: '如：D:\\公司文档\\制度',
         okLabel: '下一步',
@@ -102,7 +102,7 @@ export default {
       const ok = await askDialog({
         eyebrow: 'CONFIRM SYNC',
         title: '确认同步',
-        message: `将把「${src}」下的所有 Markdown 文件写入本地知识库。同名文件会被覆盖。`,
+        message: `将把「${src}」下的 Markdown、TXT、Word（.docx）和 PDF 写入本地知识库。同名文件会被覆盖。`,
         okLabel: '确认同步',
       })
       if (ok === null) return
@@ -122,11 +122,15 @@ export default {
 
     const isAdmin = () => state.user?.role === 'admin'
     const name = () => displayName()
+    const fileKind = (path) => {
+      const ext = String(path || '').split('.').pop().toUpperCase()
+      return ext === 'MARKDOWN' ? 'MD' : (ext || 'FILE').slice(0, 4)
+    }
 
     return {
       state, username, password, fileInput, submitAuth, docCount, openDoc, deleteDoc, ingest,
       openConversation, deleteConversation, startNewConversation, openPermissions, openAdmin, initials, name, isAdmin,
-      formatConversationTime, toggleTheme, startDrag, onUpload, onSync, confirmLogout, logout,
+      formatConversationTime, toggleTheme, startDrag, onUpload, onSync, confirmLogout, logout, fileKind,
     }
   },
   template: `
@@ -240,11 +244,11 @@ export default {
           <section class="viewer-panel">
             <div v-if="state.currentPath" class="viewer-toolbar" style="display:flex">
               <div class="viewer-heading">
-                <span class="file-badge" aria-hidden="true">MD</span>
+                <span class="file-badge" aria-hidden="true">{{ fileKind(state.currentPath) }}</span>
                 <span class="viewer-heading-copy"><span class="viewer-eyebrow">正在查看</span><span class="viewer-title">{{ state.currentPath }}</span></span>
               </div>
               <div v-if="isAdmin()" class="viewer-actions">
-                <button class="toolbar-btn" type="button" @click="state.docOpen = 'edit'">编辑</button>
+                <button v-if="state.docEditable" class="toolbar-btn" type="button" @click="state.docOpen = 'edit'">编辑</button>
                 <button class="toolbar-btn danger" type="button" @click="deleteDoc">删除</button>
               </div>
             </div>
@@ -253,14 +257,13 @@ export default {
               <div v-else class="viewer-empty">
                 <div class="viewer-empty-label">DOCUMENT PREVIEW</div>
                 <strong>选择一篇文档开始阅读</strong>
-                <span>从左侧打开一份资料，或先创建一篇 Markdown 文档。</span>
+                <span>从左侧打开一份资料。新建仍是 Markdown，上传还可以带上 TXT、Word 和 PDF。</span>
               </div>
             </div>
           </section>
         </div>
       </main>
-      <!-- 选择框只列出 Markdown。服务端只保存 .md，其他格式会被静默跳过。 -->
-      <input ref="fileInput" type="file" multiple accept=".md,.markdown" hidden @change="onUpload">
+      <input ref="fileInput" type="file" multiple accept=".md,.markdown,.txt,.docx,.pdf" hidden @change="onUpload">
     </template>
     <doc-modal></doc-modal>
     <admin-modal></admin-modal>

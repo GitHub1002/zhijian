@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import config, db, ingest, llm, md_render, rag
+from . import config, db, documents, ingest, llm, md_render, rag
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # 字体与常用前端资源的 MIME 修正，避免被识别为 octet-stream 导致浏览器拒绝加载
@@ -400,11 +400,11 @@ def _doc_tree(user):
                 child = walk(entry)
                 if child["dirs"] or child["files"]:
                     dirs.append(child)
-            elif entry.suffix.lower() == ".md":
+            elif documents.is_supported(entry.suffix):
                 path = entry.relative_to(docs_dir).as_posix()
                 library = ingest.library_for_source(path)
                 if _can_read_library(user, library):
-                    files.append({"path": path, "name": entry.stem, "library": library})
+                    files.append({"path": path, "name": entry.name, "library": library})
         return {"name": dirpath.name, "dirs": dirs, "files": files}
 
     return walk(docs_dir)
@@ -419,12 +419,21 @@ def api_docs(user=Depends(current_user)):
 def api_doc(path: str, user=Depends(current_user)):
     docs_dir = Path(config.DOCS_DIR).resolve()
     full = (docs_dir / path).resolve()
-    if not full.is_relative_to(docs_dir) or not full.exists() or full.suffix.lower() != ".md":
+    if not full.is_relative_to(docs_dir) or not full.exists() or not documents.is_supported(full.suffix):
         raise HTTPException(status_code=404, detail="文档不存在")
     if not _can_read_library(user, ingest.library_for_source(path)):
         raise HTTPException(status_code=403, detail="你没有该文档的阅读权限")
-    content = full.read_text(encoding="utf-8")
-    return {"path": path, "library": ingest.library_for_source(path), "content": content, "html": md_render.render(content)}
+    try:
+        content = documents.extract_bytes(full.name, full.read_bytes())
+    except documents.ExtractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "path": path,
+        "library": ingest.library_for_source(path),
+        "content": content,
+        "html": md_render.render(content),
+        "editable": documents.is_editable(full.suffix),
+    }
 
 
 def _resolve_doc(path):
@@ -432,8 +441,8 @@ def _resolve_doc(path):
     full = (docs_dir / path).resolve()
     if not full.is_relative_to(docs_dir):
         raise HTTPException(status_code=400, detail="非法路径")
-    if full.suffix.lower() != ".md":
-        raise HTTPException(status_code=400, detail="仅支持 .md 文档")
+    if not documents.is_supported(full.suffix):
+        raise HTTPException(status_code=400, detail="不支持该文档格式")
     return full
 
 
@@ -466,6 +475,8 @@ def update_doc(path: str, req: ContentRequest, _admin=Depends(admin_user)):
     full = _resolve_doc(path)
     if not full.exists():
         raise HTTPException(status_code=404, detail="文档不存在")
+    if not documents.is_editable(full.suffix):
+        raise HTTPException(status_code=400, detail="该格式不能在线编辑，请重新上传文件")
     full.write_text(req.content, encoding="utf-8")
     chunks = ingest.ingest_one(path, req.content)
     return {"path": path, "chunks": chunks}
@@ -492,21 +503,27 @@ async def upload_docs(files: list[UploadFile] = File(...), dir: str = Form(""), 
     target_dir.mkdir(parents=True, exist_ok=True)
 
     uploaded = []
+    skipped = []
     for f in files:
         name = Path(f.filename or "").name
-        # 只保存 .md。选择框里能看到的 .markdown，以及 docx、pdf，都会被跳过且不报错。
-        if not name or not name.lower().endswith(".md"):
+        if not name or name in {".", ".."}:
+            skipped.append({"name": name or "未命名文件", "reason": "文件名无效"})
+            continue
+        raw = await f.read()
+        try:
+            text = documents.extract_bytes(name, raw)
+        except documents.ExtractError as exc:
+            skipped.append({"name": name, "reason": str(exc)})
             continue
         dest = target_dir / name
         rel = dest.relative_to(docs_dir).as_posix()
         _require_write_library(user, ingest.library_for_source(rel))
         if dest.exists() and user["role"] != "admin":
             raise HTTPException(status_code=409, detail="普通用户只能创建新文档，不能覆盖已有文档")
-        content = (await f.read()).decode("utf-8")
-        dest.write_text(content, encoding="utf-8")
-        chunks = await run_in_threadpool(ingest.ingest_one, rel, content)
+        dest.write_bytes(raw)
+        chunks = await run_in_threadpool(ingest.ingest_one, rel, text)
         uploaded.append({"path": rel, "library": ingest.library_for_source(rel), "chunks": chunks})
-    return {"uploaded": uploaded}
+    return {"uploaded": uploaded, "skipped": skipped}
 
 
 @app.post("/api/sync")
@@ -516,16 +533,25 @@ def sync_dir(req: SyncRequest, _admin=Depends(admin_user)):
         raise HTTPException(status_code=400, detail="源目录不存在")
     docs_dir = Path(config.DOCS_DIR)
     synced = []
-    for f in sorted(source.rglob("*.md")):
+    skipped = []
+    for f in documents.iter_files(source):
         rel = f.relative_to(source)
-        dest = docs_dir / rel
+        try:
+            raw = f.read_bytes()
+            text = documents.extract_bytes(f.name, raw)
+        except documents.ExtractError as exc:
+            skipped.append({"name": rel.as_posix(), "reason": str(exc)})
+            continue
+        dest = (Path(docs_dir) / rel).resolve()
+        if not dest.is_relative_to(Path(docs_dir).resolve()):
+            skipped.append({"name": rel.as_posix(), "reason": "非法路径"})
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        content = f.read_text(encoding="utf-8")
-        dest.write_text(content, encoding="utf-8")
+        dest.write_bytes(raw)
         rel_path = dest.relative_to(docs_dir).as_posix()
-        ingest.ingest_one(rel_path, content)
+        ingest.ingest_one(rel_path, text)
         synced.append(rel_path)
-    return {"count": len(synced), "synced": synced}
+    return {"count": len(synced), "synced": synced, "skipped": skipped}
 
 
 @app.post("/api/ingest")

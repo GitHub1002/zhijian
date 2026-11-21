@@ -1,6 +1,6 @@
 # 智检
 
-一个基于 FastAPI + LangGraph RAG 的本地知识库系统，支持从 Markdown 文档中检索并生成带出处的回答。前端为原生 HTML/CSS/JavaScript，界面为极简白 + 深色双主题。
+一个基于 FastAPI + LangGraph RAG 的本地知识库系统，支持从 Markdown、TXT、Word 和 PDF 中检索并生成带出处的回答。前端为 Vue 3，界面为极简白 + 深色双主题。
 
 ## 架构
 
@@ -43,7 +43,7 @@ graph TB
     API --> RAG
     P2 --> Retrieve
     P4 --> LLM
-    DOCS["docs/ Markdown 文档"] --> EMB --> VEC
+    DOCS["docs/ Markdown、TXT、Word、PDF"] --> EMB --> VEC
     DOCS --> BM
 ```
 
@@ -58,7 +58,7 @@ graph TB
 | 嵌入模型 | BGE-small-zh-v1.5（fastembed） |
 | 重排模型 | BGE-reranker-v2-m3-int8（Cross-Encoder） |
 | 大语言模型 | DeepSeek（OpenAI 兼容接口） |
-| 前端 | 原生 HTML / CSS / JavaScript，无构建步骤 |
+| 前端 | Vue 3（浏览器原生模块，无构建步骤） |
 
 ### 检索与反幻觉优化
 
@@ -87,7 +87,7 @@ Copy-Item .env.example .env
 
 ### 3. 准备文档并建立索引
 
-将 Markdown 文档放入 `docs/` 后建立索引：
+将 Markdown、TXT、Word（.docx）或 PDF 放入 `docs/` 后建立索引。在线新建的文档仍是 Markdown。扫描版 PDF 没有文字层，不能被检索。
 
 ```powershell
 python -m scripts.ingest
@@ -114,9 +114,9 @@ python -m scripts.ingest
 
 ```text
 app/                 FastAPI 后端、认证、SQLite 与 LangGraph RAG 管道
-web/                 前端（HTML / CSS / JS + 江城圆体字体）
+web/                 Vue 前端
 scripts/             文档索引脚本
-docs/                Markdown 知识库文档
+docs/                知识库文档（Markdown、TXT、Word、PDF）
 .impeccable.md       设计上下文与设计决策
 .env.example         环境变量模板
 run_server.bat       一键启动脚本
