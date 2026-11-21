@@ -17,6 +17,7 @@ PERMISSION_CATALOG = (
     {"key": "hr", "name": "HR", "description": "人事制度、招聘、培训与员工服务资料"},
 )
 PERMISSION_KEYS = {item["key"] for item in PERMISSION_CATALOG}
+COMMON_LIBRARY = "common"
 
 
 def _now():
@@ -475,7 +476,7 @@ def set_admin(username, password):
                 (username, _hash_password(password), _now()),
             )
             user_id = cur.lastrowid
-    return {"id": user_id, "username": username, "role": "admin", "permissions": list(PERMISSION_KEYS)}
+    return {"id": user_id, "username": username, "role": "admin", "permissions": sorted(PERMISSION_KEYS | {COMMON_LIBRARY})}
 
 
 # ---- 权限 ----
@@ -487,13 +488,24 @@ def list_permissions():
 def approved_permissions(user_id):
     with _connect() as conn:
         row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
-        if row and row["role"] == "admin":
-            return sorted(PERMISSION_KEYS)
-        rows = conn.execute(
-            "SELECT permission_key FROM permission_requests WHERE user_id = ? AND status = 'approved'",
-            (user_id,),
-        ).fetchall()
-    return [row["permission_key"] for row in rows]
+        if not row:
+            return []
+        if row["role"] == "admin":
+            keys = set(PERMISSION_KEYS)
+        else:
+            keys = {
+                item["permission_key"]
+                for item in conn.execute(
+                    "SELECT permission_key FROM permission_requests WHERE user_id = ? AND status = 'approved'",
+                    (user_id,),
+                ).fetchall()
+            }
+    keys.add(COMMON_LIBRARY)
+    return sorted(keys)
+
+
+def business_permissions(user_id):
+    return [key for key in approved_permissions(user_id) if key != COMMON_LIBRARY]
 
 
 def permission_statuses(user_id):
@@ -517,9 +529,11 @@ def permission_statuses(user_id):
 
 
 def has_permission(user_id, permission_key):
-    if permission_key not in PERMISSION_KEYS:
-        return False
     with _connect() as conn:
+        if permission_key == COMMON_LIBRARY:
+            return bool(conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone())
+        if permission_key not in PERMISSION_KEYS:
+            return False
         user = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
         if user and user["role"] == "admin":
             return True

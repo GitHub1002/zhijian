@@ -61,7 +61,7 @@ class ProfileRequest(BaseModel):
 def _set_session(response: Response, user_id: int):
     response.set_cookie(
         config.SESSION_COOKIE, db.create_session(user_id), httponly=True,
-        samesite="lax", max_age=14 * 24 * 60 * 60,
+        samesite="lax", max_age=14 * 24 * 60 * 60, secure=config.SESSION_SECURE,
     )
 
 
@@ -82,9 +82,19 @@ def _has_library(user, library):
     return user["role"] == "admin" or db.has_permission(user["id"], library)
 
 
+def _can_read_library(user, library):
+    return library == db.COMMON_LIBRARY or _has_library(user, library)
+
+
 def _require_library(user, library):
     if not _has_library(user, library):
         raise HTTPException(status_code=403, detail=f"你没有“{library}”知识库权限，请先申请并等待管理员审批")
+
+
+def _require_write_library(user, library):
+    if library == db.COMMON_LIBRARY and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="全员文档只有管理员可以修改")
+    _require_library(user, library)
 
 
 def _library_name(key):
@@ -123,7 +133,7 @@ def login(req: AuthRequest, response: Response):
 @app.post("/api/auth/logout")
 def logout(request: Request, response: Response):
     db.delete_session(request.cookies.get(config.SESSION_COOKIE))
-    response.delete_cookie(config.SESSION_COOKIE)
+    response.delete_cookie(config.SESSION_COOKIE, samesite="lax", secure=config.SESSION_SECURE)
     return {"ok": True}
 
 
@@ -230,14 +240,10 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
     question = req.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题不能为空")
-    # 没有任何已审批知识库时直接拒答，不消耗用户的 AI 咨询额度。
-    if not db.approved_permissions(user["id"]):
-        result = rag.ask(question, user["id"])
-        result["quota"] = db.quota_status(user["id"])
-        return result
-
-    quota_info = db.consume_quota(user["id"])
-    if quota_info is None:
+    # 没有已审批业务库时仍可检索全员文档；拒答不扣次数。有业务库时，只有生成成功才扣次数。
+    business = db.business_permissions(user["id"])
+    status = db.quota_status(user["id"])
+    if business and not status.get("unlimited") and (status.get("remaining") or 0) <= 0:
         raise HTTPException(
             status_code=429,
             detail=f"今日咨询次数已用完（每天最多 {config.DAILY_ASK_LIMIT} 次），请明天再来。",
@@ -272,7 +278,10 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
             status_code=500,
             detail=f"问答处理失败（{type(exc).__name__}）：{str(exc)[:200]}",
         )
-    result["quota"] = quota_info
+    if result.get("grounded") and business:
+        result["quota"] = db.consume_quota(user["id"]) or db.quota_status(user["id"])
+    else:
+        result["quota"] = db.quota_status(user["id"])
     return result
 
 
@@ -310,7 +319,7 @@ def _doc_tree(user):
             elif entry.suffix.lower() == ".md":
                 path = entry.relative_to(docs_dir).as_posix()
                 library = ingest.library_for_source(path)
-                if _has_library(user, library):
+                if _can_read_library(user, library):
                     files.append({"path": path, "name": entry.stem, "library": library})
         return {"name": dirpath.name, "dirs": dirs, "files": files}
 
@@ -328,7 +337,8 @@ def api_doc(path: str, user=Depends(current_user)):
     full = (docs_dir / path).resolve()
     if not full.is_relative_to(docs_dir) or not full.exists() or full.suffix.lower() != ".md":
         raise HTTPException(status_code=404, detail="文档不存在")
-    _require_library(user, ingest.library_for_source(path))
+    if not _can_read_library(user, ingest.library_for_source(path)):
+        raise HTTPException(status_code=403, detail="你没有该文档的阅读权限")
     content = full.read_text(encoding="utf-8")
     return {"path": path, "library": ingest.library_for_source(path), "content": content, "html": md_render.render(content)}
 
@@ -353,12 +363,12 @@ def create_doc(req: DocRequest, user=Depends(current_user)):
     library = ingest.library_for_source(path)
     full = _resolve_doc(path)
     # 目录（或同名文档）在文件系统里已存在，但当前用户无该库权限 → 明确提示“已存在，请申请权限”
-    if (full.parent.exists() or full.exists()) and not _has_library(user, library):
+    if (full.parent.exists() or full.exists()) and not _can_read_library(user, library):
         raise HTTPException(
             status_code=403,
             detail=f"该目录已存在，但你没有「{_library_name(library)}」知识库的访问权限，请先申请权限",
         )
-    _require_library(user, library)
+    _require_write_library(user, library)
     if full.exists():
         raise HTTPException(status_code=409, detail="文档已存在")
     full.parent.mkdir(parents=True, exist_ok=True)
@@ -404,7 +414,7 @@ async def upload_docs(files: list[UploadFile] = File(...), dir: str = Form(""), 
             continue
         dest = target_dir / name
         rel = dest.relative_to(docs_dir).as_posix()
-        _require_library(user, ingest.library_for_source(rel))
+        _require_write_library(user, ingest.library_for_source(rel))
         if dest.exists() and user["role"] != "admin":
             raise HTTPException(status_code=409, detail="普通用户只能创建新文档，不能覆盖已有文档")
         content = (await f.read()).decode("utf-8")

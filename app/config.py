@@ -22,6 +22,7 @@ DOCS_DIR = os.getenv("DOCS_DIR", str(BASE_DIR / "docs"))
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "data" / "knowledge.db"))
 DAILY_ASK_LIMIT = int(os.getenv("DAILY_ASK_LIMIT", "10"))
 SESSION_COOKIE = "kb_session"
+SESSION_SECURE = os.getenv("SESSION_SECURE", "0").lower() in {"1", "true", "yes"}
 
 COLLECTION_NAME = "knowledge_docs"
 TOP_K = int(os.getenv("TOP_K", "5"))

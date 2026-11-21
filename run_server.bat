@@ -7,9 +7,11 @@ echo   地址: http://127.0.0.1:8688
 echo ============================================
 echo.
 echo [1/2] 检查 8688 端口是否被占用...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8688" ^| findstr "LISTENING"') do (
-  echo     端口被 PID %%a 占用，正在释放...
-  taskkill /F /PID %%a >nul 2>&1
+netstat -ano | findstr ":8688" | findstr "LISTENING" >nul
+if not errorlevel 1 (
+  echo     8688 端口已被占用。请先停止正在运行的服务。
+  pause
+  exit /b 1
 )
 echo [2/2] 启动服务（改代码会自动重载）...
 echo.

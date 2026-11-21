@@ -652,6 +652,7 @@ async function ask() {
     const data = await resp.json();
     if (!resp.ok) {
       bubble.innerHTML = `<div class="markdown">出错了：${escapeHtml(data.detail || '未知错误')}</div>`;
+      messages.scrollTop = messages.scrollHeight;
       return;
     }
     let html = `<div class="markdown">${data.answer_html}</div>`;
@@ -672,8 +673,10 @@ async function ask() {
     bubble.querySelectorAll('.source-chip').forEach(chip => {
       chip.addEventListener('click', () => openDoc(chip.dataset.path, null, chip.dataset.anchor));
     });
+    messages.scrollTop = messages.scrollHeight;
   } catch (e) {
     bubble.innerHTML = `<div class="markdown">请求失败：${escapeHtml(e.message)}</div>`;
+    messages.scrollTop = messages.scrollHeight;
   } finally {
     askBtn.disabled = false;
   }

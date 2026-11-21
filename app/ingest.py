@@ -11,13 +11,22 @@ LIBRARY_DIRS = {
     "开发": "dev", "dev": "dev", "游戏开发文档": "dev",
     "运营": "ops_business", "ops_business": "ops_business", "examples": "ops_business",
     "HR": "hr", "hr": "hr", "公司招聘": "hr",
-    "股票知识": "ops_business",
+    "common": "common",
+}
+# 这些目录留在仓库里作样例，不进入向量库和全文索引。
+SKIP_INDEX_DIRS = {
+    "股票知识", "游戏开发文档", "公司招聘", "AI知识", "测试", "测试目录", "测试上传目录",
 }
 
 
 def library_for_source(source):
     first = Path(source).parts[0] if Path(source).parts else ""
     return LIBRARY_DIRS.get(first, "ops_business")
+
+
+def indexable(source):
+    first = Path(source).parts[0] if Path(source).parts else ""
+    return first not in SKIP_INDEX_DIRS
 
 
 def _build_points(source, content):
@@ -55,6 +64,8 @@ def run_ingest():
     all_sources = set()
     for f in md_files:
         rel = f.relative_to(config.DOCS_DIR).as_posix()
+        if not indexable(rel):
+            continue
         all_sources.add(rel)
         text = f.read_text(encoding="utf-8")
         points, chunks = _build_points(rel, text)
@@ -71,6 +82,9 @@ def run_ingest():
 
 
 def ingest_one(source, content):
+    if not indexable(source):
+        delete_source(source)
+        return 0
     points, chunks = _build_points(source, content)
     store.replace_source(source, points)
     db.replace_search_chunks(source, chunks)
