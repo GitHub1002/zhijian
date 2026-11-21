@@ -130,7 +130,7 @@ def _retrieval_metrics(libraries, ranked, top, query_rewrites=0):
     }
 
 
-def _refusal(question, user_id, libraries, reason, retrieval=None):
+def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_id=None):
     messages = {
         "no_approved_permission": (
             "当前账号还没有任何已审批的知识库权限，暂不作答。"
@@ -142,9 +142,11 @@ def _refusal(question, user_id, libraries, reason, retrieval=None):
         ),
     }
     answer = messages.get(reason, "当前授权知识库没有足够依据，暂不作答。")
-    answer_id = db.create_answer(user_id, question, answer, "[]")
+    answer_id = db.create_answer(user_id, question, answer, "[]", conversation_id)
     return {
-        "answer_id": answer_id, "answer": answer, "answer_html": md_render.render(answer), "sources": [],
+        "answer_id": answer_id,
+        "conversation_id": db.conversation_id_for_answer(answer_id),
+        "answer": answer, "answer_html": md_render.render(answer), "sources": [],
         "memory_active": False, "grounded": False, "refusal_reason": reason,
         "retrieval": retrieval or {"libraries": libraries, "vector_hits": 0, "bm25_hits": 0, "reranked": 0},
     }
@@ -194,7 +196,9 @@ def _ask_legacy(question, user_id):
     answer = llm.generate(SYSTEM_PROMPT, user_prompt)
     answer_id = db.create_answer(user_id, question, answer, json.dumps(sources, ensure_ascii=False))
     return {
-        "answer_id": answer_id, "answer": answer, "answer_html": md_render.render(answer), "sources": sources,
+        "answer_id": answer_id,
+        "conversation_id": db.conversation_id_for_answer(answer_id),
+        "answer": answer, "answer_html": md_render.render(answer), "sources": sources,
         "memory_active": bool(memory), "grounded": True,
         "retrieval": {"libraries": libraries, "vector_hits": len([x for x in ranked if x.get("vector_score") is not None]),
                        "bm25_hits": len([x for x in ranked if x.get("bm25_score") is not None]),
@@ -264,7 +268,10 @@ def _graph_authorize(state):
         return {
             "libraries": [],
             "stop": True,
-            "result": _refusal(state["question"], state["user_id"], [], "no_approved_permission"),
+            "result": _refusal(
+                state["question"], state["user_id"], [], "no_approved_permission",
+                conversation_id=state.get("conversation_id"),
+            ),
         }
     return {"libraries": libraries, "stop": False}
 
@@ -291,6 +298,7 @@ def _graph_ground(state):
                     state["libraries"], state.get("ranked", []), top,
                     state.get("rewrite_count", 0),
                 ),
+                conversation_id=state.get("conversation_id"),
             ),
         }
 
@@ -329,6 +337,7 @@ def _graph_rewrite(state):
                 state["libraries"], state.get("ranked", []), state.get("top", []),
                 state.get("rewrite_count", 0),
             ),
+            conversation_id=state.get("conversation_id"),
         )
         return {"stop": True, "needs_rewrite": False, "result": result}
     return {
@@ -341,7 +350,8 @@ def _graph_rewrite(state):
 
 def _prompt_for_state(state):
     memory = db.get_memory(state["user_id"])
-    recent = db.recent_answers(state["user_id"], 3)
+    conversation_id = state.get("conversation_id")
+    recent = db.recent_answers(state["user_id"], 3, conversation_id) if conversation_id else []
     recent_text = "\n".join(f"- 用户曾问：{row['question']}" for row in recent)
     strategy = memory or "暂无已沉淀的个性化策略。"
     user_prompt = (
@@ -352,9 +362,9 @@ def _prompt_for_state(state):
     return user_prompt, memory
 
 
-def prepare(question, user_id):
+def prepare(question, user_id, conversation_id=None):
     """完成授权、检索和证据判断。拒答直接返回结果；可以生成时带上 ready。"""
-    state = {"question": question, "user_id": user_id}
+    state = {"question": question, "user_id": user_id, "conversation_id": conversation_id}
     state.update(_graph_authorize(state))
     if state.get("stop"):
         return state["result"]
@@ -394,11 +404,13 @@ def _graph_persist(state):
     sources = state["sources"]
     answer = state["answer"]
     answer_id = db.create_answer(
-        state["user_id"], state["question"], answer, json.dumps(sources, ensure_ascii=False)
+        state["user_id"], state["question"], answer, json.dumps(sources, ensure_ascii=False),
+        state.get("conversation_id"),
     )
     return {
         "result": {
             "answer_id": answer_id,
+            "conversation_id": db.conversation_id_for_answer(answer_id),
             "answer": answer,
             "answer_html": md_render.render(answer),
             "sources": sources,

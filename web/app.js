@@ -1,6 +1,16 @@
 const docList = document.getElementById('doc-list');
 const viewer = document.getElementById('viewer');
 const messages = document.getElementById('messages');
+const historyBtn = document.getElementById('history-btn');
+const historyPanel = document.getElementById('history-panel');
+const historyList = document.getElementById('history-list');
+const historyClose = document.getElementById('history-close');
+const newChatBtn = document.getElementById('new-chat-btn');
+const panelTitle = document.querySelector('.chat-panel .panel-title');
+const defaultChatTitle = panelTitle ? panelTitle.textContent : '';
+const emptyHintHtml = messages.querySelector('.empty-hint') ? messages.querySelector('.empty-hint').outerHTML : '';
+let currentConversationId = null;
+let conversationItems = [];
 const questionInput = document.getElementById('question');
 const askBtn = document.getElementById('ask-btn');
 const ingestBtn = document.getElementById('ingest-btn');
@@ -647,7 +657,18 @@ function renderAnswer(bubble, data) {
     html += '</div>';
   }
   bubble.innerHTML = html;
-  if (data.answer_id) attachFeedback(bubble, data.answer_id);
+  if (data.answer_id && data.rating) {
+    const done = document.createElement('div');
+    done.className = 'feedback done';
+    done.textContent = `已评价 ${data.rating} 星`;
+    bubble.appendChild(done);
+  } else if (data.answer_id) {
+    attachFeedback(bubble, data.answer_id);
+  }
+  if (data.conversation_id) {
+    currentConversationId = data.conversation_id;
+    loadConversations();
+  }
   updateQuota(data.quota);
   bubble.querySelectorAll('.source-chip').forEach(chip => {
     chip.addEventListener('click', () => openDoc(chip.dataset.path, null, chip.dataset.anchor));
@@ -684,6 +705,7 @@ async function readAskStream(resp, bubble) {
       const parsed = parseSseBlock(raw);
       if (parsed && parsed.event === 'error') {
         bubble.innerHTML = `<div class="markdown">出错了：${escapeHtml(parsed.data.detail || '未知错误')}</div>`;
+        if (!currentConversationId && panelTitle) panelTitle.textContent = defaultChatTitle;
         messages.scrollTop = messages.scrollHeight;
         return;
       }
@@ -705,25 +727,160 @@ async function readAskStream(resp, bubble) {
   }
 }
 
+function formatConversationTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+  return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+}
+
+function setAsking(busy) {
+  askBtn.disabled = busy;
+  if (newChatBtn) newChatBtn.disabled = busy;
+  if (historyBtn) historyBtn.disabled = busy;
+}
+
+function closeHistory() {
+  if (!historyPanel) return;
+  historyPanel.hidden = true;
+  chatPanel.classList.remove('is-history');
+  if (historyBtn) historyBtn.setAttribute('aria-expanded', 'false');
+}
+
+function openHistory() {
+  if (!historyPanel) return;
+  historyPanel.hidden = false;
+  chatPanel.classList.add('is-history');
+  if (historyBtn) historyBtn.setAttribute('aria-expanded', 'true');
+  loadConversations();
+}
+
+function renderHistoryList() {
+  if (!historyList) return;
+  if (!conversationItems.length) {
+    historyList.innerHTML = '<div class="history-empty">还没有历史对话。提问之后，可以在这里打开原来的回答和出处。</div>';
+    return;
+  }
+  historyList.innerHTML = conversationItems.map(item => `
+    <div class="history-item${item.id === currentConversationId ? ' active' : ''}" role="listitem">
+      <button class="history-open" type="button" data-open-conversation="${item.id}">
+        <span class="history-item-title">${escapeHtml(item.title)}</span>
+        <span class="history-item-meta">${escapeHtml(formatConversationTime(item.updated_at))} · ${Number(item.turns) || 0} 轮</span>
+      </button>
+      <button class="history-delete" type="button" data-delete-conversation="${item.id}" data-title="${escapeHtml(item.title)}" aria-label="删除这组对话">删除</button>
+    </div>
+  `).join('');
+}
+
+function renderRecentInEmpty() {
+  const hint = messages.querySelector('.empty-hint');
+  if (!hint) return;
+  hint.querySelectorAll('.recent-chats').forEach(node => node.remove());
+  if (!conversationItems.length) return;
+  const block = document.createElement('div');
+  block.className = 'recent-chats';
+  block.innerHTML = '<div class="hint-eyebrow"><i aria-hidden="true"></i> 最近提问</div>' +
+    conversationItems.slice(0, 4).map(item =>
+      `<button type="button" data-open-conversation="${item.id}"><span>${escapeHtml(item.title)}</span><small>${escapeHtml(formatConversationTime(item.updated_at))}</small></button>`
+    ).join('');
+  hint.appendChild(block);
+}
+
+async function loadConversations() {
+  try {
+    const resp = await fetch('/api/conversations');
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || '加载历史对话失败');
+    conversationItems = data.conversations || [];
+    renderHistoryList();
+    renderRecentInEmpty();
+    if (panelTitle) {
+      const current = conversationItems.find(item => item.id === currentConversationId);
+      if (current) panelTitle.textContent = current.title;
+      else if (!currentConversationId && !askBtn.disabled) panelTitle.textContent = defaultChatTitle;
+    }
+  } catch (error) {
+    if (historyList && historyPanel && !historyPanel.hidden) {
+      historyList.innerHTML = `<div class="history-empty">${escapeHtml(error.message)}</div>`;
+    }
+  }
+}
+
+async function openConversation(id) {
+  const resp = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.detail || '找不到这组对话');
+  currentConversationId = data.id;
+  closeHistory();
+  messages.innerHTML = '';
+  if (panelTitle) panelTitle.textContent = data.title || defaultChatTitle;
+  (data.messages || []).forEach(item => {
+    addMessage('user', item.question);
+    const bubble = addMessage('ai', '');
+    renderAnswer(bubble, item);
+  });
+  if (!(data.messages || []).length) {
+    messages.innerHTML = '<div class="history-empty">这组对话还没有内容。</div>';
+  }
+  messages.scrollTop = messages.scrollHeight;
+  renderHistoryList();
+}
+
+function startNewConversation() {
+  currentConversationId = null;
+  closeHistory();
+  messages.innerHTML = emptyHintHtml;
+  if (panelTitle) panelTitle.textContent = defaultChatTitle;
+  renderRecentInEmpty();
+  questionInput.focus();
+}
+
+function deleteConversation(id, title) {
+  confirmAsk({
+    eyebrow: 'DELETE CHAT',
+    title: '删除这组对话',
+    message: `将删除「${title || '这组对话'}」，其中的提问和回答会一并清除。`,
+    okLabel: '删除对话'
+  }, async () => {
+    const resp = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      notify(data.detail || '删除失败', 'error');
+      return;
+    }
+    if (currentConversationId === id) startNewConversation();
+    await loadConversations();
+  });
+}
+
 async function ask() {
   const q = questionInput.value.trim();
-  if (!q) return;
+  if (!q || askBtn.disabled) return;
+  closeHistory();
   clearEmptyHint();
   addMessage('user', q);
   questionInput.value = '';
   resizeQuestionInput();
-  askBtn.disabled = true;
+  setAsking(true);
+  if (!currentConversationId && panelTitle) {
+    const compact = q.replace(/\s+/g, ' ');
+    panelTitle.textContent = compact.length > 28 ? `${compact.slice(0, 28)}…` : compact;
+  }
 
   const bubble = addMessage('ai', '<span class="loading"></span>');
   try {
     const resp = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: q })
+      body: JSON.stringify({ question: q, conversation_id: currentConversationId })
     });
     if (!resp.ok) {
       const data = await resp.json();
       bubble.innerHTML = `<div class="markdown">出错了：${escapeHtml(data.detail || '未知错误')}</div>`;
+      if (!currentConversationId && panelTitle) panelTitle.textContent = defaultChatTitle;
       messages.scrollTop = messages.scrollHeight;
       return;
     }
@@ -735,9 +892,10 @@ async function ask() {
     renderAnswer(bubble, await resp.json());
   } catch (e) {
     bubble.innerHTML = `<div class="markdown">请求失败：${escapeHtml(e.message)}</div>`;
+    if (!currentConversationId && panelTitle) panelTitle.textContent = defaultChatTitle;
     messages.scrollTop = messages.scrollHeight;
   } finally {
-    askBtn.disabled = false;
+    setAsking(false);
   }
 }
 
@@ -1137,6 +1295,7 @@ function enterWorkspace(payload) {
   authGate.style.display = 'none';
   document.body.classList.remove('auth-locked');
   loadDocs();
+  loadConversations();
   loadProfile().then(applyUserProfile).catch(() => {});
 }
 
@@ -1403,9 +1562,39 @@ helpButton?.addEventListener('click', () => {
 });
 
 docSearch.addEventListener('input', () => filterDocuments(docSearch.value));
-document.querySelectorAll('[data-question]').forEach(button => {
-  button.addEventListener('click', () => {
-    questionInput.value = button.dataset.question;
+messages.addEventListener('click', event => {
+  const suggestion = event.target.closest('[data-question]');
+  if (suggestion && messages.contains(suggestion)) {
+    questionInput.value = suggestion.dataset.question;
     questionInput.focus();
-  });
+    return;
+  }
+  const opener = event.target.closest('[data-open-conversation]');
+  if (opener && messages.contains(opener)) {
+    openConversation(Number(opener.dataset.openConversation)).catch(error => notify(error.message, 'error'));
+  }
+});
+historyBtn?.addEventListener('click', () => {
+  if (!historyPanel || askBtn.disabled) return;
+  if (historyPanel.hidden) openHistory();
+  else closeHistory();
+});
+historyClose?.addEventListener('click', closeHistory);
+newChatBtn?.addEventListener('click', () => {
+  if (askBtn.disabled) return;
+  startNewConversation();
+});
+historyList?.addEventListener('click', event => {
+  const deleter = event.target.closest('[data-delete-conversation]');
+  if (deleter) {
+    deleteConversation(Number(deleter.dataset.deleteConversation), deleter.dataset.title);
+    return;
+  }
+  const opener = event.target.closest('[data-open-conversation]');
+  if (opener) {
+    openConversation(Number(opener.dataset.openConversation)).catch(error => notify(error.message, 'error'));
+  }
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && historyPanel && !historyPanel.hidden) closeHistory();
 });

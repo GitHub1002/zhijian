@@ -29,6 +29,7 @@ class AuthRequest(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
+    conversation_id: Optional[int] = None
 
 
 class FeedbackRequest(BaseModel):
@@ -237,6 +238,8 @@ def admin_delete_user(user_id: int, admin=Depends(admin_user)):
 
 
 def _ask_error_detail(exc):
+    if isinstance(exc, ValueError):
+        return str(exc)
     if isinstance(exc, RuntimeError):
         return str(exc)
     if isinstance(exc, AuthenticationError):
@@ -251,6 +254,8 @@ def _ask_error_detail(exc):
 
 
 def _raise_ask_error(exc):
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=404, detail=_ask_error_detail(exc))
     if isinstance(exc, RuntimeError):
         raise HTTPException(status_code=400, detail=_ask_error_detail(exc))
     if isinstance(exc, AuthenticationError):
@@ -286,8 +291,10 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
             detail=f"今日咨询次数已用完（每天最多 {config.DAILY_ASK_LIMIT} 次），请明天再来。",
             headers={"Retry-After": "3600"},
         )
+    if req.conversation_id is not None and not db.conversation_for_user(user["id"], req.conversation_id):
+        raise HTTPException(status_code=404, detail="找不到这组对话")
     try:
-        prepared = rag.prepare(question, user["id"])
+        prepared = rag.prepare(question, user["id"], req.conversation_id)
     except Exception as exc:
         _raise_ask_error(exc)
 
@@ -335,6 +342,50 @@ def feedback(req: FeedbackRequest, user=Depends(current_user)):
             user["id"], feedback_id, answer["question"], answer["answer"], req.rating, reason
         )
     return {"ok": True, "learning": learning}
+
+
+def _sources_from_json(raw):
+    try:
+        sources = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    return sources if isinstance(sources, list) else []
+
+
+@app.get("/api/conversations")
+def api_conversations(user=Depends(current_user)):
+    return {"conversations": db.list_conversations(user["id"])}
+
+
+@app.get("/api/conversations/{conversation_id}")
+def api_conversation(conversation_id: int, user=Depends(current_user)):
+    found = db.conversation_messages(user["id"], conversation_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="找不到这组对话")
+    convo, rows = found
+    return {
+        "id": convo["id"],
+        "title": convo["title"],
+        "updated_at": convo["updated_at"],
+        "messages": [
+            {
+                "answer_id": row["id"],
+                "question": row["question"],
+                "answer_html": md_render.render(row["answer"] or ""),
+                "sources": _sources_from_json(row["sources_json"]),
+                "created_at": row["created_at"],
+                "rating": row["rating"],
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.delete("/api/conversations/{conversation_id}")
+def api_delete_conversation(conversation_id: int, user=Depends(current_user)):
+    if not db.delete_conversation(user["id"], conversation_id):
+        raise HTTPException(status_code=404, detail="找不到这组对话")
+    return {"ok": True}
 
 
 def _doc_tree(user):

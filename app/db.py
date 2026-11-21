@@ -28,6 +28,15 @@ def _today():
     return (datetime.now(timezone.utc) + timedelta(hours=8)).date().isoformat()
 
 
+def _conversation_title(question):
+    text = " ".join((question or "").split())
+    if not text:
+        return "未命名对话"
+    if len(text) <= 28:
+        return text
+    return text[:28] + "…"
+
+
 def _connect():
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_DB_PATH), timeout=15)
@@ -70,6 +79,14 @@ def init_db():
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_answers_user ON answers(user_id, created_at DESC);
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at DESC);
             CREATE TABLE IF NOT EXISTS feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 answer_id INTEGER NOT NULL UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
@@ -138,6 +155,19 @@ def init_db():
             conn.execute("ALTER TABLE users ADD COLUMN profile_edit_month TEXT NOT NULL DEFAULT ''")
         if "profile_edit_count" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN profile_edit_count INTEGER NOT NULL DEFAULT 0")
+        answer_columns = {row["name"] for row in conn.execute("PRAGMA table_info(answers)").fetchall()}
+        if "conversation_id" not in answer_columns:
+            conn.execute("ALTER TABLE answers ADD COLUMN conversation_id INTEGER")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_answers_conversation ON answers(conversation_id, id)")
+        orphans = conn.execute(
+            "SELECT id, user_id, question, created_at FROM answers WHERE conversation_id IS NULL ORDER BY id"
+        ).fetchall()
+        for row in orphans:
+            cur = conn.execute(
+                "INSERT INTO conversations(user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (row["user_id"], _conversation_title(row["question"]), row["created_at"], row["created_at"]),
+            )
+            conn.execute("UPDATE answers SET conversation_id = ? WHERE id = ?", (cur.lastrowid, row["id"]))
         for item in PERMISSION_CATALOG:
             conn.execute(
                 "INSERT INTO permission_catalog(permission_key, name, description) VALUES (?, ?, ?) ON CONFLICT(permission_key) DO UPDATE SET name=excluded.name, description=excluded.description",
@@ -310,13 +340,98 @@ def consume_quota(user_id):
     return {"used": used, "limit": config.DAILY_ASK_LIMIT, "remaining": config.DAILY_ASK_LIMIT - used}
 
 
-def create_answer(user_id, question, answer, sources_json):
+def create_answer(user_id, question, answer, sources_json, conversation_id=None):
+    now = _now()
     with _connect() as conn:
+        if conversation_id is None:
+            cur = conn.execute(
+                "INSERT INTO conversations(user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (user_id, _conversation_title(question), now, now),
+            )
+            conversation_id = cur.lastrowid
+        else:
+            owned = conn.execute(
+                "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id),
+            ).fetchone()
+            if not owned:
+                raise ValueError("找不到这组对话")
+            conn.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                (now, conversation_id),
+            )
         cur = conn.execute(
-            "INSERT INTO answers(user_id, question, answer, sources_json, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, question, answer, sources_json, _now()),
+            "INSERT INTO answers(user_id, question, answer, sources_json, created_at, conversation_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, question, answer, sources_json, now, conversation_id),
         )
         return cur.lastrowid
+
+
+def conversation_id_for_answer(answer_id):
+    with _connect() as conn:
+        row = conn.execute("SELECT conversation_id FROM answers WHERE id = ?", (answer_id,)).fetchone()
+        return row["conversation_id"] if row else None
+
+
+def conversation_for_user(user_id, conversation_id):
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT id, title, created_at, updated_at FROM conversations WHERE id = ? AND user_id = ?",
+            (conversation_id, user_id),
+        ).fetchone()
+
+
+def list_conversations(user_id, limit=50):
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.title, c.updated_at,
+                   (SELECT COUNT(*) FROM answers a WHERE a.conversation_id = c.id) AS turns
+            FROM conversations c
+            WHERE c.user_id = ?
+            ORDER BY c.updated_at DESC, c.id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def conversation_messages(user_id, conversation_id):
+    convo = conversation_for_user(user_id, conversation_id)
+    if not convo:
+        return None
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.id, a.question, a.answer, a.sources_json, a.created_at, f.rating
+            FROM answers a
+            LEFT JOIN feedback f ON f.answer_id = a.id
+            WHERE a.user_id = ? AND a.conversation_id = ?
+            ORDER BY a.id ASC
+            """,
+            (user_id, conversation_id),
+        ).fetchall()
+    return convo, rows
+
+
+def delete_conversation(user_id, conversation_id):
+    with _connect() as conn:
+        owned = conn.execute(
+            "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+            (conversation_id, user_id),
+        ).fetchone()
+        if not owned:
+            return False
+        conn.execute(
+            "DELETE FROM answers WHERE user_id = ? AND conversation_id = ?",
+            (user_id, conversation_id),
+        )
+        conn.execute(
+            "DELETE FROM conversations WHERE id = ? AND user_id = ?",
+            (conversation_id, user_id),
+        )
+        return True
 
 
 def answer_for_user(answer_id, user_id):
@@ -341,11 +456,16 @@ def get_memory(user_id):
         return row["summary"] if row else ""
 
 
-def recent_answers(user_id, limit=5):
+def recent_answers(user_id, limit=5, conversation_id=None):
     with _connect() as conn:
+        if conversation_id is None:
+            return conn.execute(
+                "SELECT question, answer, created_at FROM answers WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
         return conn.execute(
-            "SELECT question, answer, created_at FROM answers WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-            (user_id, limit),
+            "SELECT question, answer, created_at FROM answers WHERE user_id = ? AND conversation_id = ? ORDER BY id DESC LIMIT ?",
+            (user_id, conversation_id, limit),
         ).fetchall()
 
 
