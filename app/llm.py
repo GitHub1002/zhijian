@@ -19,21 +19,41 @@ def get_client():
     return _client
 
 
-def generate(system_prompt, user_prompt):
-    client = get_client()
+def _completion_messages(system_prompt, user_prompt):
     prompt_messages = _PROMPT_TEMPLATE.format_messages(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
+    return [
+        {
+            "role": "system" if message.type == "system" else "user",
+            "content": message.content,
+        }
+        for message in prompt_messages
+    ]
+
+
+def generate(system_prompt, user_prompt):
+    client = get_client()
     resp = client.chat.completions.create(
         model=config.DEEPSEEK_MODEL,
-        messages=[
-            {
-                "role": "system" if message.type == "system" else "user",
-                "content": message.content,
-            }
-            for message in prompt_messages
-        ],
+        messages=_completion_messages(system_prompt, user_prompt),
         temperature=0.3,
     )
     return resp.choices[0].message.content
+
+
+def generate_stream(system_prompt, user_prompt):
+    client = get_client()
+    stream = client.chat.completions.create(
+        model=config.DEEPSEEK_MODEL,
+        messages=_completion_messages(system_prompt, user_prompt),
+        temperature=0.3,
+        stream=True,
+    )
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        token = chunk.choices[0].delta.content or ""
+        if token:
+            yield token

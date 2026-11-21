@@ -633,6 +633,78 @@ function clearEmptyHint() {
   if (hint) hint.remove();
 }
 
+function renderAnswer(bubble, data) {
+  let html = `<div class="markdown">${data.answer_html || ''}</div>`;
+  if (data.sources && data.sources.length) {
+    html += '<div class="sources">参考来源：';
+    const seen = new Set();
+    data.sources.forEach(s => {
+      const label = s.source + (s.heading ? ` > ${s.heading}` : '');
+      if (seen.has(label)) return;
+      seen.add(label);
+      html += `<a class="source-chip" data-path="${escapeHtml(s.source)}" data-anchor="${escapeHtml(s.anchor || '')}">${escapeHtml(label)}</a>`;
+    });
+    html += '</div>';
+  }
+  bubble.innerHTML = html;
+  if (data.answer_id) attachFeedback(bubble, data.answer_id);
+  updateQuota(data.quota);
+  bubble.querySelectorAll('.source-chip').forEach(chip => {
+    chip.addEventListener('click', () => openDoc(chip.dataset.path, null, chip.dataset.anchor));
+  });
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function parseSseBlock(block) {
+  let event = 'message';
+  const dataLines = [];
+  block.split('\n').forEach(line => {
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+  });
+  if (!dataLines.length) return null;
+  return { event, data: JSON.parse(dataLines.join('\n')) };
+}
+
+async function readAskStream(resp, bubble) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  bubble.innerHTML = '<div class="markdown"></div>';
+  const live = bubble.querySelector('.markdown');
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let splitAt = buffer.indexOf('\n\n');
+    while (splitAt >= 0) {
+      const raw = buffer.slice(0, splitAt);
+      buffer = buffer.slice(splitAt + 2);
+      const parsed = parseSseBlock(raw);
+      if (parsed && parsed.event === 'error') {
+        bubble.innerHTML = `<div class="markdown">出错了：${escapeHtml(parsed.data.detail || '未知错误')}</div>`;
+        messages.scrollTop = messages.scrollHeight;
+        return;
+      }
+      if (parsed && parsed.event === 'done') {
+        renderAnswer(bubble, parsed.data);
+        return;
+      }
+      if (parsed && parsed.event === 'token' && parsed.data.token) {
+        text += parsed.data.token;
+        live.textContent = text;
+        messages.scrollTop = messages.scrollHeight;
+      }
+      splitAt = buffer.indexOf('\n\n');
+    }
+  }
+  if (text) {
+    live.textContent = text;
+    messages.scrollTop = messages.scrollHeight;
+  }
+}
+
 async function ask() {
   const q = questionInput.value.trim();
   if (!q) return;
@@ -649,31 +721,18 @@ async function ask() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: q })
     });
-    const data = await resp.json();
     if (!resp.ok) {
+      const data = await resp.json();
       bubble.innerHTML = `<div class="markdown">出错了：${escapeHtml(data.detail || '未知错误')}</div>`;
       messages.scrollTop = messages.scrollHeight;
       return;
     }
-    let html = `<div class="markdown">${data.answer_html}</div>`;
-    if (data.sources && data.sources.length) {
-      html += '<div class="sources">参考来源：';
-      const seen = new Set();
-      data.sources.forEach(s => {
-        const label = s.source + (s.heading ? ` > ${s.heading}` : '');
-        if (seen.has(label)) return;
-        seen.add(label);
-        html += `<a class="source-chip" data-path="${escapeHtml(s.source)}" data-anchor="${escapeHtml(s.anchor || '')}">${escapeHtml(label)}</a>`;
-      });
-      html += '</div>';
+    const contentType = resp.headers.get('content-type') || '';
+    if (contentType.includes('text/event-stream')) {
+      await readAskStream(resp, bubble);
+      return;
     }
-    bubble.innerHTML = html;
-    attachFeedback(bubble, data.answer_id);
-    updateQuota(data.quota);
-    bubble.querySelectorAll('.source-chip').forEach(chip => {
-      chip.addEventListener('click', () => openDoc(chip.dataset.path, null, chip.dataset.anchor));
-    });
-    messages.scrollTop = messages.scrollHeight;
+    renderAnswer(bubble, await resp.json());
   } catch (e) {
     bubble.innerHTML = `<div class="markdown">请求失败：${escapeHtml(e.message)}</div>`;
     messages.scrollTop = messages.scrollHeight;

@@ -1,3 +1,4 @@
+import json
 import re
 import sqlite3
 import mimetypes
@@ -6,12 +7,12 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import config, db, ingest, md_render, rag
+from . import config, db, ingest, llm, md_render, rag
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # 字体与常用前端资源的 MIME 修正，避免被识别为 octet-stream 导致浏览器拒绝加载
@@ -235,6 +236,42 @@ def admin_delete_user(user_id: int, admin=Depends(admin_user)):
     return {"ok": True, "deleted_user_id": user_id}
 
 
+def _ask_error_detail(exc):
+    if isinstance(exc, RuntimeError):
+        return str(exc)
+    if isinstance(exc, AuthenticationError):
+        return "大模型服务认证失败：请检查 .env 中的 DEEPSEEK_API_KEY 是否有效（当前 Key 被服务端拒绝）。"
+    if isinstance(exc, RateLimitError):
+        return "大模型服务限流或余额不足，请稍后重试或检查账户额度。"
+    if isinstance(exc, APIConnectionError):
+        return "无法连接大模型服务（网络或代理问题），请检查 DEEPSEEK_BASE_URL 与网络连通性。"
+    if isinstance(exc, APIStatusError):
+        return f"大模型服务返回异常状态 {exc.status_code}：{str(exc)[:200]}"
+    return f"问答处理失败（{type(exc).__name__}）：{str(exc)[:200]}"
+
+
+def _raise_ask_error(exc):
+    if isinstance(exc, RuntimeError):
+        raise HTTPException(status_code=400, detail=_ask_error_detail(exc))
+    if isinstance(exc, AuthenticationError):
+        raise HTTPException(status_code=502, detail=_ask_error_detail(exc))
+    if isinstance(exc, RateLimitError):
+        raise HTTPException(status_code=503, detail=_ask_error_detail(exc))
+    if isinstance(exc, APIConnectionError):
+        raise HTTPException(status_code=504, detail=_ask_error_detail(exc))
+    if isinstance(exc, APIStatusError):
+        raise HTTPException(status_code=502, detail=_ask_error_detail(exc))
+    raise HTTPException(status_code=500, detail=_ask_error_detail(exc))
+
+
+def _sse(payload, event=None):
+    lines = []
+    if event:
+        lines.append(f"event: {event}")
+    lines.append("data: " + json.dumps(payload, ensure_ascii=False))
+    return "\n".join(lines) + "\n\n"
+
+
 @app.post("/api/ask")
 def api_ask(req: AskRequest, user=Depends(current_user)):
     question = req.question.strip()
@@ -250,39 +287,34 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
             headers={"Retry-After": "3600"},
         )
     try:
-        result = rag.ask(question, user["id"])
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except AuthenticationError:
-        raise HTTPException(
-            status_code=502,
-            detail="大模型服务认证失败：请检查 .env 中的 DEEPSEEK_API_KEY 是否有效（当前 Key 被服务端拒绝）。",
-        )
-    except RateLimitError:
-        raise HTTPException(
-            status_code=503,
-            detail="大模型服务限流或余额不足，请稍后重试或检查账户额度。",
-        )
-    except APIConnectionError:
-        raise HTTPException(
-            status_code=504,
-            detail="无法连接大模型服务（网络或代理问题），请检查 DEEPSEEK_BASE_URL 与网络连通性。",
-        )
-    except APIStatusError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"大模型服务返回异常状态 {exc.status_code}：{str(exc)[:200]}",
-        )
-    except Exception as exc:  # 兜底：避免把 500 堆栈直接抛给前端
-        raise HTTPException(
-            status_code=500,
-            detail=f"问答处理失败（{type(exc).__name__}）：{str(exc)[:200]}",
-        )
-    if result.get("grounded") and business:
-        result["quota"] = db.consume_quota(user["id"]) or db.quota_status(user["id"])
-    else:
-        result["quota"] = db.quota_status(user["id"])
-    return result
+        prepared = rag.prepare(question, user["id"])
+    except Exception as exc:
+        _raise_ask_error(exc)
+
+    if not prepared.get("ready"):
+        prepared["quota"] = db.quota_status(user["id"])
+        return prepared
+
+    def events():
+        parts = []
+        try:
+            for token in llm.generate_stream(rag.SYSTEM_PROMPT, prepared["user_prompt"]):
+                parts.append(token)
+                yield _sse({"token": token}, event="token")
+            result = rag.persist_prepared(prepared, "".join(parts))
+            if business:
+                result["quota"] = db.consume_quota(user["id"]) or db.quota_status(user["id"])
+            else:
+                result["quota"] = db.quota_status(user["id"])
+            yield _sse(result, event="done")
+        except Exception as exc:
+            yield _sse({"detail": _ask_error_detail(exc)}, event="error")
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/feedback")

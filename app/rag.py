@@ -339,7 +339,7 @@ def _graph_rewrite(state):
     }
 
 
-def _graph_generate(state):
+def _prompt_for_state(state):
     memory = db.get_memory(state["user_id"])
     recent = db.recent_answers(state["user_id"], 3)
     recent_text = "\n".join(f"- 用户曾问：{row['question']}" for row in recent)
@@ -349,6 +349,42 @@ def _graph_generate(state):
         f"最近问题（仅保持上下文，不可作为事实来源）：\n{recent_text or '无'}\n\n"
         f"参考资料（只能引用这些编号）：\n{state['context']}"
     )
+    return user_prompt, memory
+
+
+def prepare(question, user_id):
+    """完成授权、检索和证据判断。拒答直接返回结果；可以生成时带上 ready。"""
+    state = {"question": question, "user_id": user_id}
+    state.update(_graph_authorize(state))
+    if state.get("stop"):
+        return state["result"]
+    while True:
+        state.update(_graph_retrieve(state))
+        state.update(_graph_ground(state))
+        route = _route_after_ground(state)
+        if route == "stop":
+            return state["result"]
+        if route == "rewrite":
+            state.update(_graph_rewrite(state))
+            if state.get("stop"):
+                return state["result"]
+            continue
+        break
+    if not config.DEEPSEEK_API_KEY:
+        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+    user_prompt, memory = _prompt_for_state(state)
+    state["user_prompt"] = user_prompt
+    state["memory"] = memory
+    state["ready"] = True
+    return state
+
+
+def persist_prepared(state, answer):
+    return _graph_persist({**state, "answer": answer})["result"]
+
+
+def _graph_generate(state):
+    user_prompt, memory = _prompt_for_state(state)
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
     return {"answer": llm.generate(SYSTEM_PROMPT, user_prompt), "memory": memory, "stop": False}
