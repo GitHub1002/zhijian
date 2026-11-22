@@ -31,6 +31,8 @@ COLLECTION_NAME = "knowledge_docs"
 # MIN_VECTOR_SCORE 是余弦相似度门槛。改写次数限制在 0 或 1，默认不改写。
 # RRF_K=60 是常用经验值；MIN_VECTOR_SCORE 针对 bge-small-zh 的相似度分布，
 # 更换嵌入模型后需要重新标定。
+# MIN_RERANK_SCORE 是重排模型 logits 门槛，只有模型重排生效时才使用；
+# 词面兜底分不可跨批比较，仍走向量/BM25 门槛。
 TOP_K = int(os.getenv("TOP_K", "5"))
 HYBRID_TOP_K = int(os.getenv("HYBRID_TOP_K", "12"))
 RRF_K = int(os.getenv("RRF_K", "60"))
@@ -38,6 +40,7 @@ RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "3"))
 RERANK_ENABLED = os.getenv("RERANK_ENABLED", "1").lower() not in {"0", "false", "no"}
 RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 MIN_VECTOR_SCORE = float(os.getenv("MIN_VECTOR_SCORE", "0.35"))
+MIN_RERANK_SCORE = float(os.getenv("MIN_RERANK_SCORE", "0.0"))
 RAG_QUERY_REWRITE_LIMIT = max(0, min(int(os.getenv("RAG_QUERY_REWRITE_LIMIT", "0")), 1))
 
 # 反馈编辑窗口与轨迹保留期。反馈只做轻量校验，不在这里调用大模型。

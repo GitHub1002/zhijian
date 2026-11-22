@@ -53,17 +53,21 @@ def _rerank(question, candidates):
     if not candidates:
         return []
     reranker = _get_reranker()
+    mode = "lexical"
     if reranker:
         try:
             scores = list(reranker.rerank(question, [item["text"] for item in candidates]))
             for item, score in zip(candidates, scores):
                 item["rerank_score"] = float(score)
+            mode = "model"
         except Exception:
             reranker = False
     if not reranker:
         # 兜底分 = 词面重合 + RRF，与模型分不可跨批比较；这里只用于同一批候选内部排序。
         for item in candidates:
             item["rerank_score"] = _lexical_score(question, item["text"]) + item.get("rrf_score", 0.0)
+    for item in candidates:
+        item["rerank_mode"] = mode
     ordered = sorted(candidates, key=lambda item: item.get("rerank_score", 0), reverse=True)
     for rank, item in enumerate(ordered, start=1):
         item["rerank_rank"] = rank
@@ -175,7 +179,23 @@ def _record_trace(state, answer_id, grounded, refusal_reason="", timings=None):
     )
 
 
+def _model_rerank_score(top):
+    scores = [
+        float(item["rerank_score"])
+        for item in top
+        if item.get("rerank_mode") == "model" and item.get("rerank_score") is not None
+    ]
+    return max(scores) if scores else None
+
+
 def _has_grounded_evidence(question, top):
+    # 模型重排可用时，最高重排 logits 比向量相似度更能区分“有依据”和“只是字面接近”：
+    # golden set 上 > 0 能保留全部可回答样本，同时挡住不可回答样本。
+    # 重排被关闭或加载失败时，退回下面的向量/BM25 门槛。
+    rerank_score = _model_rerank_score(top)
+    if rerank_score is not None:
+        return rerank_score > config.MIN_RERANK_SCORE
+
     # SQLite 的 bm25() 越小越相关。词面重合用来挡住只撞上一个常见二字的假命中。
     # 具体门槛：
     # - 向量侧：余弦相似度 >= MIN_VECTOR_SCORE（默认 0.35，按 bge-small-zh 标定）；

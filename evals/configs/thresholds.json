@@ -5,7 +5,9 @@
     "recall@5": 0.70,
     "mrr": 0.65,
     "ndcg@5": 0.70,
-    "false_refusal_rate": 0.10
+    "false_refusal_rate": 0.10,
+    "false_answer_rate": 0.20,
+    "correct_refusal_rate": 0.80
   },
   "ragas": {
     "faithfulness": 0.85,

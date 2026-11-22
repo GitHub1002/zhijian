@@ -57,7 +57,7 @@ python evals/run_retrieval_eval.py \
 # 改参数后对比基线
 python evals/run_retrieval_eval.py \
   --dataset evals/datasets/seed_v1.jsonl --k 5 \
-  --config '{"RRF_K": 40}' --compare evals/reports/baseline.json
+  --config '{"RRF_K": 40}' --compare evals/configs/baseline_rerank_gate.json
 
 # 回答质量：默认用现有 DeepSeek 做 LLM Judge
 python evals/run_ragas_eval.py \
@@ -70,8 +70,8 @@ python evals/run_ragas_eval.py \
 
 # 阈值门禁
 python evals/check_thresholds.py \
-  --baseline evals/reports/baseline.json \
-  --candidate evals/reports/latest.json
+  --baseline evals/configs/baseline_rerank_gate.json \
+  --candidate data/eval/latest.json
 ```
 
 ## 指标口径
@@ -89,12 +89,24 @@ python evals/check_thresholds.py \
 
 RAG 指标（LLM Judge / RAGAS）：`faithfulness`、`answer_relevancy`、`context_precision`、`context_recall`。
 
+## 证据门槛
+
+模型重排生效时，`_has_grounded_evidence` 用 top 候选的 `rerank_score` 与 `MIN_RERANK_SCORE`（默认 `0.0`）比较；重排关闭或加载失败时，退回 `MIN_VECTOR_SCORE` 与 BM25 + 词面覆盖率门槛。
+
+```bash
+# 扫描重排门槛，观察可回答/不可回答样本的取舍
+python evals/run_retrieval_eval.py \
+  --dataset evals/datasets/seed_v1.jsonl --k 5 \
+  --config '{"MIN_RERANK_SCORE": 0.5}' --compare evals/reports/baseline.json
+```
+
 ## 评测隔离
 
 - 真实评测建议先用 `python evals/prepare_eval_env.py` 复制一份 `data/eval/snapshot-.../`，再用 `--db-path` / `--qdrant-path` 指向快照。
 - 首次真实运行会加载嵌入和重排模型；如果本机没有缓存，会触发下载。
 - `--dry-run` 不导入 `app`，用于 CI 或快速检查脚本是否可用。
-- 阈值先记录基线，稳定后再启用硬门禁；当前 `configs/thresholds.json` 是建议值，跑出第一版基线后按实际情况调整。
+- `configs/baseline_vector.json` 是加证据门槛之前的基线，保留用于前后对比；当前基线是 `configs/baseline_rerank_gate.json`。
+- `configs/thresholds.json` 已启用 `false_answer_rate` / `correct_refusal_rate` 硬门禁，回归时 `check_thresholds.py` 退出码非 0。
 
 ## 标注流程
 
