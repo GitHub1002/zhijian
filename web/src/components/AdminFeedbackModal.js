@@ -1,4 +1,11 @@
-import { state, loadAdminFeedback, loadAdminFeedbackDetail, triageFeedback } from '../store.js'
+import {
+  state,
+  loadAdminFeedback,
+  loadAdminFeedbackDetail,
+  loadAdminAnalytics,
+  exportAdminFeedback,
+  triageFeedback,
+} from '../store.js'
 
 const STATUS_OPTIONS = [
   ['new', '待处理'],
@@ -21,6 +28,18 @@ const SENTIMENT_OPTIONS = [
   ['negative', '点踩'],
   ['positive', '点赞'],
 ]
+const REASON_LABELS = {
+  retrieval_miss: '没找到资料',
+  wrong_info: '内容错误',
+  incomplete: '不完整',
+  outdated: '资料过时',
+  citation_wrong: '引用不对',
+  permission: '权限问题',
+  formatting: '格式问题',
+  unjustified_refusal: '不该拒答',
+  other: '其他',
+}
+const CATEGORY_LABELS = Object.fromEntries(CATEGORY_OPTIONS)
 
 export default {
   setup() {
@@ -30,6 +49,23 @@ export default {
 
     function formatTime(value) {
       return value ? value.replace('T', ' ').slice(0, 16) : ''
+    }
+
+    function percent(value) {
+      return `${Math.round((Number(value) || 0) * 100)}%`
+    }
+
+    function reasonLabel(value) {
+      return REASON_LABELS[value] || value
+    }
+
+    function categoryLabel(value) {
+      return CATEGORY_LABELS[value] || value
+    }
+
+    function refreshAll() {
+      loadAdminFeedback(1)
+      loadAdminAnalytics()
     }
 
     function triageDetail() {
@@ -47,7 +83,12 @@ export default {
       loadAdminFeedback,
       loadAdminFeedbackDetail,
       applyFilters,
+      exportAdminFeedback,
       formatTime,
+      percent,
+      reasonLabel,
+      categoryLabel,
+      refreshAll,
       triageDetail,
       statusOptions: STATUS_OPTIONS,
       categoryOptions: CATEGORY_OPTIONS,
@@ -63,6 +104,43 @@ export default {
         </div>
         <div class="modal-body">
           <p class="admin-copy">点踩会带上原因、来源标记和当次检索轨迹。先看问题是“没检索到”还是“检索到但答错”，再决定修检索、修 prompt 还是补文档。</p>
+          <div v-if="state.adminAnalyticsState" class="admin-users-state">{{ state.adminAnalyticsState }}</div>
+          <div v-else-if="state.adminAnalyticsOverview" class="admin-analytics">
+            <div class="admin-analytics-cards">
+              <div class="admin-stat"><span>回答</span><strong>{{ state.adminAnalyticsOverview.answers }}</strong></div>
+              <div class="admin-stat"><span>Grounded 率</span><strong>{{ percent(state.adminAnalyticsOverview.grounded_rate) }}</strong></div>
+              <div class="admin-stat"><span>拒答率</span><strong>{{ percent(state.adminAnalyticsOverview.refusal_rate) }}</strong></div>
+              <div class="admin-stat"><span>反馈覆盖</span><strong>{{ percent(state.adminAnalyticsOverview.feedback_coverage) }}</strong></div>
+              <div class="admin-stat"><span>点踩率</span><strong>{{ percent(state.adminAnalyticsOverview.negative_rate) }}</strong></div>
+            </div>
+            <div class="admin-analytics-grid">
+              <div>
+                <div class="admin-section-title">按知识库</div>
+                <table class="admin-analytics-table">
+                  <thead><tr><th>库</th><th>回答</th><th>点踩</th></tr></thead>
+                  <tbody>
+                    <tr v-for="item in state.adminAnalyticsLibraries" :key="item.library">
+                      <td>{{ item.library }}</td>
+                      <td>{{ item.answers }}</td>
+                      <td>{{ item.negative }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-if="!state.adminAnalyticsLibraries.length" class="admin-empty">近 30 天没有可统计的检索结果。</div>
+              </div>
+              <div>
+                <div class="admin-section-title">点踩原因</div>
+                <div class="admin-reason-list">
+                  <span v-for="item in state.adminAnalyticsReasons" :key="item.reason" class="reason-chip">{{ reasonLabel(item.reason) }} · {{ item.count }}</span>
+                </div>
+                <div v-if="!state.adminAnalyticsReasons.length" class="admin-empty">近 30 天还没有点踩原因。</div>
+                <div class="admin-section-title">分流分布</div>
+                <div class="admin-reason-list">
+                  <span v-for="item in state.adminAnalyticsCategories" :key="item.category" class="reason-chip">{{ categoryLabel(item.category) }} · {{ item.count }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="admin-feedback-filters">
             <select v-model="state.adminFeedbackFilters.sentiment" @change="applyFilters">
               <option value="">全部情感</option>
@@ -77,6 +155,7 @@ export default {
               <option v-for="item in statusOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option>
             </select>
             <button class="toolbar-btn" type="button" @click="applyFilters">刷新</button>
+            <button class="toolbar-btn" type="button" @click="exportAdminFeedback">导出 CSV</button>
           </div>
           <div v-if="state.adminFeedbackState" class="admin-users-state">{{ state.adminFeedbackState }}</div>
           <div class="admin-feedback-layout">
@@ -147,7 +226,7 @@ export default {
           </div>
         </div>
         <div class="modal-footer">
-          <button class="toolbar-btn" type="button" @click="loadAdminFeedback(state.adminFeedbackPage)">刷新列表</button>
+          <button class="toolbar-btn" type="button" @click="refreshAll">刷新</button>
           <button class="primary-btn" type="button" @click="state.adminFeedbackOpen = false">完成</button>
         </div>
       </div>

@@ -46,6 +46,11 @@ export const state = reactive({
   adminFeedbackFilters: { sentiment: '', category: '', status: '', library: '' },
   adminFeedbackDetail: null,
   adminFeedbackDetailState: '',
+  adminAnalyticsOverview: null,
+  adminAnalyticsLibraries: [],
+  adminAnalyticsReasons: [],
+  adminAnalyticsCategories: [],
+  adminAnalyticsState: '',
   permissionOpen: false,
   permissions: [],
   permissionState: '',
@@ -488,7 +493,40 @@ export async function loadFeedbackForAnswer(answerId) {
 export async function openAdminFeedback() {
   state.adminFeedbackOpen = true
   state.adminFeedbackDetail = null
-  await loadAdminFeedback(1)
+  await Promise.all([loadAdminFeedback(1), loadAdminAnalytics()])
+}
+
+export async function loadAdminAnalytics() {
+  state.adminAnalyticsState = '正在加载看板…'
+  try {
+    const [overview, libraries, reasons, categories] = await Promise.all([
+      api('/api/admin/analytics/overview'),
+      api('/api/admin/analytics/libraries'),
+      api('/api/admin/analytics/reasons'),
+      api('/api/admin/analytics/categories'),
+    ])
+    state.adminAnalyticsOverview = overview || null
+    state.adminAnalyticsLibraries = libraries.items || []
+    state.adminAnalyticsReasons = reasons.items || []
+    state.adminAnalyticsCategories = categories.items || []
+    state.adminAnalyticsState = ''
+  } catch (error) {
+    state.adminAnalyticsState = error.message
+  }
+}
+
+export function exportAdminFeedback() {
+  const params = new URLSearchParams()
+  Object.entries(state.adminFeedbackFilters).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  const query = params.toString()
+  const link = document.createElement('a')
+  link.href = `/api/admin/feedback/export.csv${query ? `?${query}` : ''}`
+  link.download = 'feedback.csv'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }
 
 export async function loadAdminFeedback(page = 1) {
@@ -527,7 +565,7 @@ export async function triageFeedback(id, payload) {
   })
   state.adminFeedbackDetail = data.feedback || state.adminFeedbackDetail
   notify('反馈状态已更新', 'success')
-  await loadAdminFeedback(state.adminFeedbackPage)
+  await Promise.all([loadAdminFeedback(state.adminFeedbackPage), loadAdminAnalytics()])
 }
 
 export async function openPermissions() {

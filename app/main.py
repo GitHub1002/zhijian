@@ -4,6 +4,8 @@
 转成 JSON 或 SSE。业务规则尽量下沉到 db.py / rag.py，这里只做参数校验、
 权限判断和错误映射。
 """
+import csv
+import io
 import json
 import re
 import sqlite3
@@ -20,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import config, db, documents, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
+from . import analytics, config, db, documents, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # 字体与常用前端资源的 MIME 修正，避免被识别为 octet-stream 导致浏览器拒绝加载
@@ -308,6 +310,72 @@ def admin_feedback(
     )
 
 
+FEEDBACK_CSV_COLUMNS = (
+    ("id", "反馈ID"),
+    ("created_at", "提交时间"),
+    ("username", "用户"),
+    ("question", "问题"),
+    ("answer", "回答"),
+    ("sentiment", "情感"),
+    ("rating", "评分"),
+    ("reasons", "原因"),
+    ("comment", "评论"),
+    ("corrected_answer", "纠正答案"),
+    ("status", "状态"),
+    ("triage_category", "分流"),
+    ("triage_note", "处理备注"),
+    ("grounded", "是否grounded"),
+    ("refusal_reason", "拒答原因"),
+    ("best_rerank_score", "最高重排分"),
+    ("libraries", "知识库"),
+)
+
+
+def _csv_cell(value):
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    # 防止 Excel 把 = + - @ 开头的单元格当成公式执行。
+    return "'" + text if text[:1] in {"=", "+", "-", "@"} else text
+
+
+@app.get("/api/admin/feedback/export.csv")
+def admin_feedback_export(
+    sentiment: Optional[str] = None,
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    library: Optional[str] = None,
+    grounded: Optional[bool] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    q: Optional[str] = None,
+    _admin=Depends(admin_user),
+):
+    rows = db.export_feedback(
+        sentiment=sentiment,
+        category=category,
+        status=status,
+        library=library,
+        grounded=grounded,
+        date_from=date_from,
+        date_to=date_to,
+        q=(q or "")[:100] or None,
+    )
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([label for _, label in FEEDBACK_CSV_COLUMNS])
+    for row in rows:
+        writer.writerow([_csv_cell(row.get(key)) for key, _ in FEEDBACK_CSV_COLUMNS])
+    # 带 BOM，Excel 直接打开中文不乱码。
+    return Response(
+        content=chr(0xFEFF) + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="feedback.csv"'},
+    )
+
+
 @app.get("/api/admin/feedback/{feedback_id}")
 def admin_feedback_detail(feedback_id: int, _admin=Depends(admin_user)):
     item = db.feedback_detail(feedback_id)
@@ -326,6 +394,31 @@ def admin_feedback_triage(
     if not item:
         raise HTTPException(status_code=404, detail="反馈不存在")
     return {"ok": True, "feedback": item}
+
+
+@app.get("/api/admin/analytics/overview")
+def admin_analytics_overview(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
+    return analytics.overview(days)
+
+
+@app.get("/api/admin/analytics/timeseries")
+def admin_analytics_timeseries(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
+    return {"items": analytics.timeseries(days)}
+
+
+@app.get("/api/admin/analytics/libraries")
+def admin_analytics_libraries(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
+    return {"items": analytics.libraries(days)}
+
+
+@app.get("/api/admin/analytics/reasons")
+def admin_analytics_reasons(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
+    return {"items": analytics.reasons(days)}
+
+
+@app.get("/api/admin/analytics/categories")
+def admin_analytics_categories(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
+    return {"items": analytics.categories(days)}
 
 
 def _ask_error_detail(exc):

@@ -820,10 +820,9 @@ def set_feedback_triage(feedback_id, category, confidence=0.0, note=""):
         )
 
 
-def list_feedback(page=1, page_size=20, *, sentiment=None, category=None, status=None,
-                  library=None, grounded=None, date_from=None, date_to=None, q=None):
-    page = max(1, int(page or 1))
-    page_size = min(100, max(1, int(page_size or 20)))
+def _feedback_filters(*, sentiment=None, category=None, status=None, library=None,
+                      grounded=None, date_from=None, date_to=None, q=None):
+    """列表和 CSV 导出共用同一套筛选条件，避免两边口径漂移。"""
     where = []
     params = []
     if sentiment:
@@ -851,6 +850,17 @@ def list_feedback(page=1, page_size=20, *, sentiment=None, category=None, status
         where.append("(a.question LIKE ? OR f.comment LIKE ?)")
         params.extend([f"%{q}%", f"%{q}%"])
     clause = (" WHERE " + " AND ".join(where)) if where else ""
+    return clause, params
+
+
+def list_feedback(page=1, page_size=20, *, sentiment=None, category=None, status=None,
+                  library=None, grounded=None, date_from=None, date_to=None, q=None):
+    page = max(1, int(page or 1))
+    page_size = min(100, max(1, int(page_size or 20)))
+    clause, params = _feedback_filters(
+        sentiment=sentiment, category=category, status=status, library=library,
+        grounded=grounded, date_from=date_from, date_to=date_to, q=q,
+    )
     base = f"""FROM feedback f
                LEFT JOIN answers a ON a.id = f.answer_id
                LEFT JOIN answer_traces t ON t.answer_id = f.answer_id
@@ -883,6 +893,36 @@ def list_feedback(page=1, page_size=20, *, sentiment=None, category=None, status
         "total": total,
         "pages": max(1, (total + page_size - 1) // page_size),
     }
+
+
+def export_feedback(limit=10000, **filters):
+    """导出反馈明细，默认最多 10000 行；筛选口径与 list_feedback 一致。"""
+    clause, params = _feedback_filters(**filters)
+    limit = max(1, min(10000, int(limit or 10000)))
+    base = f"""FROM feedback f
+               LEFT JOIN answers a ON a.id = f.answer_id
+               LEFT JOIN answer_traces t ON t.answer_id = f.answer_id
+               LEFT JOIN users u ON u.id = f.user_id
+               {clause}"""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""SELECT f.id, f.created_at, u.username, a.question,
+                       substr(a.answer, 1, 1000) AS answer,
+                       f.sentiment, f.rating, f.reasons_json, f.comment,
+                       f.corrected_answer, f.status, f.triage_category, f.triage_note,
+                       t.grounded, t.refusal_reason, t.best_rerank_score, t.libraries_json
+                {base}
+                ORDER BY f.created_at DESC, f.id DESC
+                LIMIT ?""",
+            [*params, limit],
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["reasons"] = "、".join(_load_json(item.pop("reasons_json", "[]"), []))
+        item["libraries"] = "、".join(_load_json(item.pop("libraries_json", "[]"), []))
+        items.append(item)
+    return items
 
 
 def feedback_detail(feedback_id):

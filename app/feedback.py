@@ -103,6 +103,10 @@ def classify(feedback, trace=None):
         return "doc_issue", 0.9, "资料过时"
     if "citation_wrong" in reasons or "wrong_citation" in marks:
         return "citation_issue", 0.9, "引用不正确"
+    if "irrelevant" in marks:
+        return "retrieval_failure", 0.8, "标记的来源不相关"
+    if "missing_context" in marks:
+        return "retrieval_failure", 0.7, "标记的来源缺少上下文"
     if "retrieval_miss" in reasons:
         return "retrieval_failure", 0.9, "用户反馈没找到相关资料"
     if "unjustified_refusal" in reasons:
