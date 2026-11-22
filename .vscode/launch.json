@@ -17,6 +17,20 @@
         "cwd": "${workspaceFolder}",
         "console": "integratedTerminal",
         "justMyCode": true
+      },
+      {
+        "name": "调试入库（隔离数据）",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "scripts.ingest",
+        "cwd": "${workspaceFolder}",
+        "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+        "console": "integratedTerminal",
+        "justMyCode": true,
+        "env": {
+          "DB_PATH": "${workspaceFolder}\\data\\debug\\knowledge.db",
+          "QDRANT_PATH": "${workspaceFolder}\\data\\debug\\qdrant"
+        }
       }
     ]
   }
