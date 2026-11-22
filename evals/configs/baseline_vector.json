@@ -1,0 +1,39 @@
+{
+  "name": "baseline_vector",
+  "dataset": "D:\\github_projects\\RAG-knowledge\\RAG-knowledge-main\\evals\\datasets\\seed_v1.jsonl",
+  "k": [
+    3,
+    5,
+    12
+  ],
+  "match": "source_heading",
+  "config": {
+    "requested": {},
+    "applied": {}
+  },
+  "generated_at": "2026-11-22T12:38:06.613379+00:00",
+  "aggregate": {
+    "ap": 0.944,
+    "hit@12": 1.0,
+    "hit@3": 0.98,
+    "hit@5": 1.0,
+    "mrr": 0.944,
+    "ndcg@12": 0.9577,
+    "ndcg@3": 0.95,
+    "ndcg@5": 0.9577,
+    "precision@12": 0.0833,
+    "precision@3": 0.3267,
+    "precision@5": 0.2,
+    "recall@12": 1.0,
+    "recall@3": 0.98,
+    "recall@5": 1.0,
+    "answerable_cases": 50,
+    "unanswerable_cases": 5,
+    "errors": 0,
+    "avg_latency_ms": 1931.6,
+    "cases_with_vector_hits": 55,
+    "correct_refusal_rate": 0.0,
+    "false_answer_rate": 1.0,
+    "false_refusal_rate": 0.0
+  }
+}

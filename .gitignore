@@ -24,3 +24,8 @@ __pycache__/
 
 # 改名前的界面截图，含本地用户名；重截后再提交
 /assets/screenshots/
+
+# 评测报告（含检索片段正文）与评测快照，不提交
+/evals/reports/
+/evals/.cache/
+/data/eval/

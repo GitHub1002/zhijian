@@ -16,6 +16,14 @@ def get_client():
     return _client
 
 
+def close():
+    """显式关闭本地 Qdrant 客户端，避免解释器退出时再触发析构异常。"""
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None
+
+
 def ensure_collection():
     client = get_client()
     if not client.collection_exists(config.COLLECTION_NAME):
