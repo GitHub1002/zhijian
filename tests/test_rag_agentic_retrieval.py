@@ -45,7 +45,6 @@ def test_graph_rewrites_once_then_answers_from_grounded_evidence(monkeypatch):
 
     monkeypatch.setattr(rag, "_hybrid_search", hybrid_search)
     monkeypatch.setattr(rag.llm, "generate", generate)
-    monkeypatch.setattr(rag.db, "get_memory", lambda _user_id: "")
     monkeypatch.setattr(rag.db, "recent_answers", lambda *_: [])
     monkeypatch.setattr(rag.db, "create_answer", lambda *_: 77)
 

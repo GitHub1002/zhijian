@@ -1,5 +1,5 @@
 import { nextTick, watch } from 'vue'
-import { state, ask, openDoc, sendFeedback, notify } from '../store.js'
+import { state, ask, openDoc, sendFeedback, updateFeedback, loadFeedbackForAnswer, notify } from '../store.js'
 import { sourceLabel } from '../editor.js'
 
 export default {
@@ -30,31 +30,141 @@ export default {
       nextTick(() => document.getElementById('question')?.focus())
     }
 
-    async function rate(message, rating) {
-      if (rating === 5) {
-        try {
-          await sendFeedback(message, 5, '')
-        } catch (error) {
-          notify(error.message, 'error')
-        }
-        return
+    const reasonOptions = [
+      ['retrieval_miss', '没找到相关资料'],
+      ['wrong_info', '内容不对'],
+      ['incomplete', '不完整'],
+      ['outdated', '过时'],
+      ['citation_wrong', '引用不对'],
+      ['permission', '权限问题'],
+      ['formatting', '格式问题'],
+      ['unjustified_refusal', '本应回答却拒答'],
+      ['other', '其他'],
+    ]
+    const sourceMarkOptions = [
+      ['wrong_citation', '引用有误'],
+      ['irrelevant', '不相关'],
+      ['outdated', '过时'],
+      ['missing_context', '缺少上下文'],
+    ]
+    const reasonLabel = (key) => (reasonOptions.find(item => item[0] === key) || [key, key])[1]
+
+    function ensureFeedback(message) {
+      if (!message.feedback) {
+        message.feedback = { sentiment: '', reasons: [], comment: '', source_marks: [] }
       }
-      message._rating = rating
-      message._showReason = true
+      if (!Array.isArray(message.feedback.reasons)) message.feedback.reasons = []
+      if (!Array.isArray(message.feedback.source_marks)) message.feedback.source_marks = []
+      if (typeof message.feedback.comment !== 'string') message.feedback.comment = ''
+      return message.feedback
     }
 
-    async function submitReason(message) {
-      const reason = (message._reason || '').trim()
-      if (reason.length < 10) {
-        message._hint = '原因至少需要 10 个字符'
+    function hasReason(message, key) {
+      return ensureFeedback(message).reasons.includes(key)
+    }
+
+    function toggleReason(message, key) {
+      const feedback = ensureFeedback(message)
+      feedback.reasons = feedback.reasons.includes(key)
+        ? feedback.reasons.filter(item => item !== key)
+        : [...feedback.reasons, key]
+    }
+
+    function hasSourceMark(message, index, mark) {
+      return ensureFeedback(message).source_marks.some(
+        item => item.source_index === index && item.mark === mark
+      )
+    }
+
+    function toggleSourceMark(message, index, mark) {
+      const feedback = ensureFeedback(message)
+      const exists = feedback.source_marks.some(
+        item => item.source_index === index && item.mark === mark
+      )
+      feedback.source_marks = exists
+        ? feedback.source_marks.filter(
+            item => !(item.source_index === index && item.mark === mark)
+          )
+        : [...feedback.source_marks, { source_index: index, mark }]
+    }
+
+    async function chooseSentiment(message, sentiment) {
+      const feedback = ensureFeedback(message)
+      feedback.sentiment = sentiment
+      message._hint = ''
+      if (sentiment === 'positive') {
+        await submitFeedback(message)
         return
       }
-      try {
-        await sendFeedback(message, message._rating, reason)
-        message._showReason = false
-      } catch (error) {
-        message._hint = error.message
+      message._editing = true
+    }
+
+    async function submitFeedback(message) {
+      const feedback = ensureFeedback(message)
+      if (!feedback.sentiment) {
+        message._hint = '请先选择有帮助或没帮助'
+        return
       }
+      if (feedback.sentiment === 'negative' && !feedback.reasons.length) {
+        message._hint = '点踩时至少选择一个原因'
+        return
+      }
+      if (
+        feedback.reasons.includes('other') &&
+        (feedback.comment || '').trim().length < 10
+      ) {
+        message._hint = '选择“其他”时请补充至少 10 个字符'
+        return
+      }
+      const payload = {
+        sentiment: feedback.sentiment,
+        reasons: feedback.reasons,
+        comment: (feedback.comment || '').trim(),
+        source_marks: feedback.source_marks,
+      }
+      try {
+        if (feedback.id) await updateFeedback(message, payload)
+        else await sendFeedback(message, payload)
+        message._editing = false
+        message._hint = ''
+        message._feedbackBackup = null
+      } catch (error) {
+        if (error.message.includes('已经评价过')) {
+          try {
+            const existing = await loadFeedbackForAnswer(message.answerId)
+            if (existing) message.feedback = existing
+            message._hint = '已加载之前的反馈，可以直接修改'
+          } catch {
+            message._hint = error.message
+          }
+          return
+        }
+        message._hint = error.message
+        notify(error.message, 'error')
+      }
+    }
+
+    async function editFeedback(message) {
+      message._feedbackBackup = JSON.parse(JSON.stringify(message.feedback || {}))
+      message._editing = true
+      message._hint = ''
+      try {
+        const existing = await loadFeedbackForAnswer(message.answerId)
+        if (existing) message.feedback = existing
+      } catch {
+        // 保留当前内存里的反馈，用户仍可重新提交
+      }
+    }
+
+    function cancelFeedback(message) {
+      if (message.feedback?.id && message._feedbackBackup) {
+        message.feedback = message._feedbackBackup
+      } else {
+        message.feedback = null
+      }
+      message._feedbackBackup = null
+      message._editing = false
+      message._hint = ''
     }
 
     const quotaLabel = () => {
@@ -64,7 +174,12 @@ export default {
       return `剩余 ${Number(quota.remaining) || 0} 次`
     }
 
-    return { state, ask, openDoc, sourceLabel, resize, onKey, useSuggestion, rate, submitReason, quotaLabel }
+    return {
+      state, ask, openDoc, sourceLabel, resize, onKey, useSuggestion,
+      reasonOptions, sourceMarkOptions, reasonLabel, hasReason, toggleReason,
+      hasSourceMark, toggleSourceMark, chooseSentiment, submitFeedback,
+      editFeedback, cancelFeedback, quotaLabel,
+    }
   },
   template: `
     <section class="chat-panel" id="chat-panel">
@@ -100,15 +215,36 @@ export default {
               <div v-if="message.sources && message.sources.length" class="sources">参考来源：
                 <button v-for="source in message.sources" :key="sourceLabel(source)" type="button" class="source-chip" @click="openDoc(source.source, source.anchor || '')">{{ sourceLabel(source) }}</button>
               </div>
-              <div v-if="message.answerId && message.rating" class="feedback done">已评价 {{ message.rating }} 星</div>
-              <div v-else-if="message.answerId" class="feedback">
-                <span>这次回答有帮助吗？</span>
-                <button v-for="star in 5" :key="star" type="button" :class="{ selected: star <= (message._rating || 0) }" :aria-label="star + ' 星'" @click="rate(message, star)">★</button>
-                <div v-if="message._showReason" class="feedback-reason">
-                  <textarea v-model="message._reason" placeholder="请说明哪里不满意（至少 10 个字符）"></textarea>
-                  <small>{{ message._hint || '' }}</small>
-                  <button type="button" @click="submitReason(message)">提交反馈</button>
-                </div>
+              <div v-if="message.answerId" class="feedback">
+                <template v-if="message.feedback && message.feedback.id && !message._editing">
+                  <span class="feedback-done">
+                    {{ message.feedback.sentiment === 'positive' ? '已点赞' : '已点踩' }}
+                    <template v-if="message.feedback.reasons && message.feedback.reasons.length"> · {{ message.feedback.reasons.map(reasonLabel).join('、') }}</template>
+                  </span>
+                  <button type="button" class="feedback-edit-link" @click="editFeedback(message)">修改</button>
+                </template>
+                <template v-else>
+                  <span>这次回答有帮助吗？</span>
+                  <button type="button" class="feedback-choice" :class="{ selected: message.feedback && message.feedback.sentiment === 'positive' }" aria-label="有帮助" @click="chooseSentiment(message, 'positive')">👍</button>
+                  <button type="button" class="feedback-choice" :class="{ selected: message.feedback && message.feedback.sentiment === 'negative' }" aria-label="没帮助" @click="chooseSentiment(message, 'negative')">👎</button>
+                  <div v-if="message._editing" class="feedback-form">
+                    <div class="feedback-reason-chips" role="group" aria-label="反馈原因">
+                      <button v-for="option in reasonOptions" :key="option[0]" type="button" class="reason-chip" :class="{ active: hasReason(message, option[0]) }" @click="toggleReason(message, option[0])">{{ option[1] }}</button>
+                    </div>
+                    <textarea v-model="message.feedback.comment" placeholder="补充说明（选择“其他”时至少 10 个字符）"></textarea>
+                    <div v-if="message.sources && message.sources.length" class="feedback-source-marks">
+                      <div v-for="(source, index) in message.sources" :key="sourceLabel(source)" class="feedback-source-row">
+                        <span class="feedback-source-label">{{ sourceLabel(source) }}</span>
+                        <button v-for="option in sourceMarkOptions" :key="option[0]" type="button" class="reason-chip" :class="{ active: hasSourceMark(message, source.index || index + 1, option[0]) }" @click="toggleSourceMark(message, source.index || index + 1, option[0])">{{ option[1] }}</button>
+                      </div>
+                    </div>
+                    <small>{{ message._hint || '' }}</small>
+                    <div class="feedback-actions">
+                      <button type="button" @click="submitFeedback(message)">提交反馈</button>
+                      <button type="button" class="feedback-cancel" @click="cancelFeedback(message)">取消</button>
+                    </div>
+                  </div>
+                </template>
               </div>
             </template>
           </div>

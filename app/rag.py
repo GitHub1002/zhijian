@@ -257,7 +257,7 @@ def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_
         "conversation_id": conv_id,
         "trace_id": trace_id,
         "answer": answer, "answer_html": md_render.render(answer), "sources": [],
-        "memory_active": False, "grounded": False, "refusal_reason": reason,
+        "grounded": False, "refusal_reason": reason,
         "retrieval": retrieval or {"libraries": libraries, "vector_hits": 0, "bm25_hits": 0, "reranked": 0},
     }
 
@@ -290,13 +290,12 @@ def _ask_legacy(question, user_id):
         sources.append(_source_dict(index, item))
         context_parts.append(f"[{index}]【知识库: {item.get('library', '')} | 来源: {_source_label(item)}】\n{item['text']}")
     context = "\n\n---\n\n".join(context_parts)
-    memory = db.get_memory(user_id)
     recent = db.recent_answers(user_id, 3)
     recent_text = "\n".join(f"- 用户曾问：{row['question']}" for row in recent)
-    strategy = memory or "暂无已沉淀的个性化策略。"
     user_prompt = (
-        f"问题：{question}\n\n已学习的回答策略（不可覆盖资料事实）：\n{strategy}\n\n"
-        f"最近问题（仅保持上下文，不可作为事实来源）：\n{recent_text or '无'}\n\n参考资料（只能引用这些编号）：\n{context}"
+        f"问题：{question}\n\n"
+        f"最近问题（仅保持上下文，不可作为事实来源）：\n{recent_text or '无'}\n\n"
+        f"参考资料（只能引用这些编号）：\n{context}"
     )
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
@@ -321,38 +320,11 @@ def _ask_legacy(question, user_id):
         "conversation_id": conversation_id,
         "trace_id": trace_id,
         "answer": answer, "answer_html": md_render.render(answer), "sources": sources,
-        "memory_active": bool(memory), "grounded": True,
+        "grounded": True,
         "retrieval": {"libraries": libraries, "vector_hits": len([x for x in ranked if x.get("vector_score") is not None]),
                        "bm25_hits": len([x for x in ranked if x.get("bm25_score") is not None]),
                        "reranked": len(ranked), "top_k": len(top)},
     }
-
-
-def learn_from_feedback(user_id, feedback_id, question, answer, rating, reason):
-    old_summary = db.get_memory(user_id)
-    prompt = (
-        "请分析一次企业知识库问答的低分反馈，并输出可执行的回答策略。\n"
-        "只输出两段纯文本：第一段为本次问题的改进要点（不超过 100 字）；"
-        "第二段为更新后的长期策略摘要（不超过 300 字）。"
-        "不要编造文档事实，不要泄露隐私，不要复述用户原话。\n\n"
-        f"评分：{rating}/5\n用户原因：{reason}\n问题：{question}\n回答：{answer}\n"
-        f"当前策略摘要：{old_summary or '暂无'}"
-    )
-    try:
-        result = llm.generate(
-            "你是知识库问答质量改进教练，关注准确性、完整性、可读性和引用。", prompt
-        ).strip()
-        if "\n" in result:
-            note, summary = result.split("\n", 1)
-        else:
-            note, summary = result, result
-        note = note.strip()[:800]
-        summary = summary.strip()[:1200]
-    except Exception:
-        note = "低分反馈已记录：后续回答需要更直接地命中文档依据，并检查是否完整回应用户问题。"
-        summary = (old_summary + "\n" if old_summary else "") + note
-    db.save_learning(user_id, feedback_id, note, summary)
-    return {"note": note, "summary": summary}
 
 
 # ---- LangGraph 工作流 ----
@@ -377,7 +349,6 @@ class RagState(TypedDict, total=False):
     top: list[dict]
     sources: list[dict]
     context: str
-    memory: str
     answer: str
     result: dict
     stop: bool
@@ -470,19 +441,15 @@ def _graph_rewrite(state):
 
 
 def _prompt_for_state(state):
-    # 策略摘要只影响语气和完整度，不能作为事实来源；提示词里已写明“不可覆盖资料事实”。
-    # 只有续写同一组对话时才带入这组里的最近问题，新对话不借用其他话题。
-    memory = db.get_memory(state["user_id"])
+    # 个人策略已下线；最近问题只用于同一组对话的上下文，不能作为事实来源。
     conversation_id = state.get("conversation_id")
     recent = db.recent_answers(state["user_id"], 3, conversation_id) if conversation_id else []
     recent_text = "\n".join(f"- 用户曾问：{row['question']}" for row in recent)
-    strategy = memory or "暂无已沉淀的个性化策略。"
-    user_prompt = (
-        f"问题：{state['question']}\n\n已学习的回答策略（不可覆盖资料事实）：\n{strategy}\n\n"
+    return (
+        f"问题：{state['question']}\n\n"
         f"最近问题（仅保持上下文，不可作为事实来源）：\n{recent_text or '无'}\n\n"
         f"参考资料（只能引用这些编号）：\n{state['context']}"
     )
-    return user_prompt, memory
 
 
 def prepare(question, user_id, conversation_id=None):
@@ -516,9 +483,7 @@ def prepare(question, user_id, conversation_id=None):
         break
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
-    user_prompt, memory = _prompt_for_state(state)
-    state["user_prompt"] = user_prompt
-    state["memory"] = memory
+    state["user_prompt"] = _prompt_for_state(state)
     state["timings"] = {"prepare_ms": int((time.perf_counter() - state["started_at"]) * 1000)}
     state["ready"] = True
     return state
@@ -534,10 +499,10 @@ def persist_prepared(state, answer, generation_ms=None):
 
 
 def _graph_generate(state):
-    user_prompt, memory = _prompt_for_state(state)
+    user_prompt = _prompt_for_state(state)
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
-    return {"answer": llm.generate(SYSTEM_PROMPT, user_prompt), "memory": memory, "stop": False}
+    return {"answer": llm.generate(SYSTEM_PROMPT, user_prompt), "stop": False}
 
 
 def _graph_persist(state):
@@ -557,7 +522,6 @@ def _graph_persist(state):
             "answer": answer,
             "answer_html": md_render.render(answer),
             "sources": sources,
-            "memory_active": bool(state.get("memory")),
             "grounded": True,
             "retrieval": _retrieval_metrics(
                 state["libraries"], state.get("ranked", []), state.get("top", []),

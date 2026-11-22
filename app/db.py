@@ -624,7 +624,9 @@ def conversation_messages(user_id, conversation_id):
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT a.id, a.question, a.answer, a.sources_json, a.created_at, f.rating
+            SELECT a.id, a.question, a.answer, a.sources_json, a.created_at,
+                   f.id AS feedback_id, f.rating, f.sentiment, f.reasons_json,
+                   f.comment, f.corrected_answer, f.status
             FROM answers a
             LEFT JOIN feedback f ON f.answer_id = a.id
             WHERE a.user_id = ? AND a.conversation_id = ?
@@ -818,10 +820,124 @@ def set_feedback_triage(feedback_id, category, confidence=0.0, note=""):
         )
 
 
-def get_memory(user_id):
+def list_feedback(page=1, page_size=20, *, sentiment=None, category=None, status=None,
+                  library=None, grounded=None, date_from=None, date_to=None, q=None):
+    page = max(1, int(page or 1))
+    page_size = min(100, max(1, int(page_size or 20)))
+    where = []
+    params = []
+    if sentiment:
+        where.append("f.sentiment = ?")
+        params.append(sentiment)
+    if category:
+        where.append("f.triage_category = ?")
+        params.append(category)
+    if status:
+        where.append("f.status = ?")
+        params.append(status)
+    if library:
+        where.append("t.libraries_json LIKE ?")
+        params.append(f'%"{library}"%')
+    if grounded is not None:
+        where.append("t.grounded = ?")
+        params.append(1 if grounded else 0)
+    if date_from:
+        where.append("f.created_at >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("f.created_at <= ?")
+        params.append(date_to)
+    if q:
+        where.append("(a.question LIKE ? OR f.comment LIKE ?)")
+        params.extend([f"%{q}%", f"%{q}%"])
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    base = f"""FROM feedback f
+               LEFT JOIN answers a ON a.id = f.answer_id
+               LEFT JOIN answer_traces t ON t.answer_id = f.answer_id
+               LEFT JOIN users u ON u.id = f.user_id
+               {clause}"""
     with _connect() as conn:
-        row = conn.execute("SELECT summary FROM assistant_memory WHERE user_id = ?", (user_id,)).fetchone()
-        return row["summary"] if row else ""
+        total = conn.execute("SELECT COUNT(*) AS n " + base, params).fetchone()["n"]
+        rows = conn.execute(
+            f"""SELECT f.id, f.answer_id, f.user_id, u.username, f.rating, f.sentiment,
+                       f.reasons_json, f.comment, f.status, f.triage_category,
+                       f.triage_confidence, f.triage_note, f.created_at, f.updated_at,
+                       a.question, substr(a.answer, 1, 160) AS answer_snippet,
+                       t.grounded, t.refusal_reason, t.best_rerank_score, t.top_k,
+                       t.libraries_json
+                {base}
+                ORDER BY f.created_at DESC, f.id DESC
+                LIMIT ? OFFSET ?""",
+            [*params, page_size, (page - 1) * page_size],
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["reasons"] = _load_json(item.pop("reasons_json", "[]"), [])
+        item["libraries"] = _load_json(item.pop("libraries_json", "[]"), [])
+        items.append(item)
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": max(1, (total + page_size - 1) // page_size),
+    }
+
+
+def feedback_detail(feedback_id):
+    with _connect() as conn:
+        row = conn.execute(
+            """SELECT f.*, a.question, a.answer, a.sources_json, u.username
+               FROM feedback f
+               LEFT JOIN answers a ON a.id = f.answer_id
+               LEFT JOIN users u ON u.id = f.user_id
+               WHERE f.id = ?""",
+            (feedback_id,),
+        ).fetchone()
+        if not row:
+            return None
+        item = _feedback_dict(conn, row)
+        item["question"] = row["question"]
+        item["answer"] = row["answer"]
+        item["sources"] = _load_json(row["sources_json"], [])
+        item["username"] = row["username"]
+        trace = conn.execute(
+            "SELECT * FROM answer_traces WHERE answer_id = ?", (row["answer_id"],)
+        ).fetchone()
+        item["trace"] = None
+        if trace:
+            trace_item = dict(trace)
+            trace_item["candidates"] = [
+                dict(candidate)
+                for candidate in conn.execute(
+                    "SELECT * FROM retrieval_candidates WHERE trace_id = ? ORDER BY rank",
+                    (trace["trace_id"],),
+                ).fetchall()
+            ]
+            item["trace"] = trace_item
+        return item
+
+
+def triage_feedback(feedback_id, actor_id, status, category, note=""):
+    with _connect() as conn:
+        row = conn.execute("SELECT status FROM feedback WHERE id = ?", (feedback_id,)).fetchone()
+        if not row:
+            return None
+        now = _now()
+        conn.execute(
+            """INSERT INTO feedback_triage_events(
+                feedback_id, actor_id, from_status, to_status, category, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (feedback_id, actor_id, row["status"], status, category, note or "", now),
+        )
+        conn.execute(
+            """UPDATE feedback SET status = ?, triage_category = ?, triage_note = ?,
+               triaged_by = ?, triaged_at = ?, updated_at = ? WHERE id = ?""",
+            (status, category, note or "", actor_id, now, now, feedback_id),
+        )
+        updated = conn.execute("SELECT * FROM feedback WHERE id = ?", (feedback_id,)).fetchone()
+        return _feedback_dict(conn, updated)
 
 
 def recent_answers(user_id, limit=5, conversation_id=None):
@@ -835,19 +951,6 @@ def recent_answers(user_id, limit=5, conversation_id=None):
             "SELECT question, answer, created_at FROM answers WHERE user_id = ? AND conversation_id = ? ORDER BY id DESC LIMIT ?",
             (user_id, conversation_id, limit),
         ).fetchall()
-
-
-def save_learning(user_id, feedback_id, note, summary):
-    with _connect() as conn:
-        conn.execute(
-            "INSERT INTO learning_notes(user_id, feedback_id, note, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, feedback_id, note, _now()),
-        )
-        conn.execute(
-            """INSERT INTO assistant_memory(user_id, summary, updated_at) VALUES (?, ?, ?)
-               ON CONFLICT(user_id) DO UPDATE SET summary=excluded.summary, updated_at=excluded.updated_at""",
-            (user_id, summary, _now()),
-        )
 
 
 def list_users():

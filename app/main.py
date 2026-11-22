@@ -66,6 +66,12 @@ class FeedbackUpdateRequest(BaseModel):
     source_marks: Optional[list[FeedbackSourceMark]] = None
 
 
+class FeedbackTriageRequest(BaseModel):
+    status: Literal["new", "triaged", "in_progress", "resolved", "dismissed"]
+    category: str
+    note: str = Field(default="", max_length=2000)
+
+
 class DocRequest(BaseModel):
     path: str
     content: str
@@ -274,6 +280,54 @@ def admin_delete_user(user_id: int, admin=Depends(admin_user)):
     return {"ok": True, "deleted_user_id": user_id}
 
 
+@app.get("/api/admin/feedback")
+def admin_feedback(
+    page: int = 1,
+    page_size: int = 20,
+    sentiment: Optional[str] = None,
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    library: Optional[str] = None,
+    grounded: Optional[bool] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    q: Optional[str] = None,
+    _admin=Depends(admin_user),
+):
+    return db.list_feedback(
+        page=page,
+        page_size=page_size,
+        sentiment=sentiment,
+        category=category,
+        status=status,
+        library=library,
+        grounded=grounded,
+        date_from=date_from,
+        date_to=date_to,
+        q=(q or "")[:100] or None,
+    )
+
+
+@app.get("/api/admin/feedback/{feedback_id}")
+def admin_feedback_detail(feedback_id: int, _admin=Depends(admin_user)):
+    item = db.feedback_detail(feedback_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    return {"feedback": item}
+
+
+@app.patch("/api/admin/feedback/{feedback_id}")
+def admin_feedback_triage(
+    feedback_id: int, req: FeedbackTriageRequest, admin=Depends(admin_user)
+):
+    if req.category not in feedback_rules.TRIAGE_CATEGORIES:
+        raise HTTPException(status_code=422, detail="未知分流类别")
+    item = db.triage_feedback(feedback_id, admin["id"], req.status, req.category, req.note)
+    if not item:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    return {"ok": True, "feedback": item}
+
+
 def _ask_error_detail(exc):
     # 把上游异常翻译成可行动的中文，避免 SDK 堆栈或 Key 泄露到前端。
     if isinstance(exc, ValueError):
@@ -407,21 +461,7 @@ def feedback(req: FeedbackRequest, user=Depends(current_user)):
     trace = tracing.get_trace_by_answer(req.answer_id)
     category, confidence, note = feedback_rules.classify(normalized, trace)
     db.set_feedback_triage(feedback_id, category, confidence, note)
-    learning = None
-    if normalized["sentiment"] == "negative":
-        learning = rag.learn_from_feedback(
-            user["id"],
-            feedback_id,
-            answer["question"],
-            answer["answer"],
-            normalized["rating"],
-            normalized["comment"] or req.reason,
-        )
-    return {
-        "ok": True,
-        "feedback": db.get_feedback(feedback_id, user["id"]),
-        "learning": learning,
-    }
+    return {"ok": True, "feedback": db.get_feedback(feedback_id, user["id"])}
 
 
 @app.patch("/api/feedback/{feedback_id}")
@@ -489,6 +529,28 @@ def _sources_from_json(raw):
     return sources if isinstance(sources, list) else []
 
 
+def _feedback_reasons(raw):
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _message_feedback(row):
+    if row["feedback_id"] is None:
+        return None
+    return {
+        "id": row["feedback_id"],
+        "rating": row["rating"],
+        "sentiment": row["sentiment"],
+        "reasons": _feedback_reasons(row["reasons_json"]),
+        "comment": row["comment"],
+        "corrected_answer": row["corrected_answer"],
+        "status": row["status"],
+    }
+
+
 @app.get("/api/conversations")
 def api_conversations(user=Depends(current_user)):
     return {"conversations": db.list_conversations(user["id"])}
@@ -512,6 +574,7 @@ def api_conversation(conversation_id: int, user=Depends(current_user)):
                 "sources": _sources_from_json(row["sources_json"]),
                 "created_at": row["created_at"],
                 "rating": row["rating"],
+                "feedback": _message_feedback(row),
             }
             for row in rows
         ],

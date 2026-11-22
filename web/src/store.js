@@ -37,6 +37,15 @@ export const state = reactive({
   adminRequests: [],
   adminState: '',
   adminReqState: '',
+  adminFeedbackOpen: false,
+  adminFeedbackItems: [],
+  adminFeedbackPage: 1,
+  adminFeedbackPages: 1,
+  adminFeedbackTotal: 0,
+  adminFeedbackState: '',
+  adminFeedbackFilters: { sentiment: '', category: '', status: '', library: '' },
+  adminFeedbackDetail: null,
+  adminFeedbackDetailState: '',
   permissionOpen: false,
   permissions: [],
   permissionState: '',
@@ -314,6 +323,7 @@ export async function openConversation(id) {
       sources: dedupeSources(item.sources || []),
       answerId: item.answer_id,
       rating: item.rating,
+      feedback: item.feedback || null,
       pending: false,
     })
   })
@@ -437,6 +447,8 @@ function applyAnswer(bubble, data) {
   bubble.sources = dedupeSources(data.sources || [])
   bubble.answerId = data.answer_id || null
   bubble.rating = data.rating || null
+  bubble.traceId = data.trace_id || null
+  bubble.feedback = null
   if (data.quota) state.quota = data.quota
   if (data.conversation_id) {
     state.conversationId = data.conversation_id
@@ -447,12 +459,75 @@ function applyAnswer(bubble, data) {
   }
 }
 
-export async function sendFeedback(message, rating, reason) {
-  await api('/api/feedback', {
+export async function sendFeedback(message, payload) {
+  const data = await api('/api/feedback', {
     method: 'POST',
-    body: JSON.stringify({ answer_id: message.answerId, rating, reason }),
+    body: JSON.stringify({ answer_id: message.answerId, ...payload }),
   })
-  message.rating = rating
+  message.feedback = data.feedback || null
+  message.rating = message.feedback?.rating || null
+  return message.feedback
+}
+
+export async function updateFeedback(message, payload) {
+  if (!message.feedback?.id) return sendFeedback(message, payload)
+  const data = await api(`/api/feedback/${encodeURIComponent(message.feedback.id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+  message.feedback = data.feedback || message.feedback
+  message.rating = message.feedback?.rating || null
+  return message.feedback
+}
+
+export async function loadFeedbackForAnswer(answerId) {
+  const data = await api(`/api/feedback/answer/${encodeURIComponent(answerId)}`)
+  return data.feedback || null
+}
+
+export async function openAdminFeedback() {
+  state.adminFeedbackOpen = true
+  state.adminFeedbackDetail = null
+  await loadAdminFeedback(1)
+}
+
+export async function loadAdminFeedback(page = 1) {
+  state.adminFeedbackState = '正在加载反馈…'
+  const params = new URLSearchParams({ page: String(page), page_size: '20' })
+  Object.entries(state.adminFeedbackFilters).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  try {
+    const data = await api(`/api/admin/feedback?${params.toString()}`)
+    state.adminFeedbackItems = data.items || []
+    state.adminFeedbackPage = data.page || 1
+    state.adminFeedbackPages = data.pages || 1
+    state.adminFeedbackTotal = data.total || 0
+    state.adminFeedbackState = ''
+  } catch (error) {
+    state.adminFeedbackState = error.message
+  }
+}
+
+export async function loadAdminFeedbackDetail(id) {
+  state.adminFeedbackDetailState = '正在加载详情…'
+  try {
+    const data = await api(`/api/admin/feedback/${encodeURIComponent(id)}`)
+    state.adminFeedbackDetail = data.feedback || null
+    state.adminFeedbackDetailState = ''
+  } catch (error) {
+    state.adminFeedbackDetailState = error.message
+  }
+}
+
+export async function triageFeedback(id, payload) {
+  const data = await api(`/api/admin/feedback/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+  state.adminFeedbackDetail = data.feedback || state.adminFeedbackDetail
+  notify('反馈状态已更新', 'success')
+  await loadAdminFeedback(state.adminFeedbackPage)
 }
 
 export async function openPermissions() {

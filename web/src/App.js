@@ -2,11 +2,12 @@ import { onMounted, onBeforeUnmount, ref } from 'vue'
 import DocTree from './components/DocTree.js'
 import ChatPane from './components/ChatPane.js'
 import { ToastStack, ConfirmDialog, DocModal, AdminModal, PermissionModal, ProfileModal, HelpModal } from './components/Dialogs.js'
-import { state, boot, submitAuth, logout, notify, askDialog, docCount, openDoc, deleteDoc, uploadFiles, uploadLibraries, loadDocs, syncDir, ingest, openConversation, deleteConversation, startNewConversation, openPermissions, openAdmin, displayName, initials } from './store.js'
+import AdminFeedbackModal from './components/AdminFeedbackModal.js'
+import { state, boot, submitAuth, logout, notify, askDialog, docCount, openDoc, deleteDoc, uploadFiles, uploadLibraries, loadDocs, syncDir, ingest, openConversation, deleteConversation, startNewConversation, openPermissions, openAdmin, openAdminFeedback, displayName, initials } from './store.js'
 import { formatConversationTime } from './editor.js'
 
 export default {
-  components: { DocTree, ChatPane, ToastStack, ConfirmDialog, DocModal, AdminModal, PermissionModal, ProfileModal, HelpModal },
+  components: { DocTree, ChatPane, ToastStack, ConfirmDialog, DocModal, AdminModal, AdminFeedbackModal, PermissionModal, ProfileModal, HelpModal },
   setup() {
     const username = ref('')
     const password = ref('')
@@ -137,7 +138,7 @@ export default {
 
     return {
       state, username, password, fileInput, submitAuth, docCount, openDoc, deleteDoc, ingest,
-      openConversation, deleteConversation, startNewConversation, openPermissions, openAdmin, initials, name, isAdmin,
+      openConversation, deleteConversation, startNewConversation, openPermissions, openAdmin, openAdminFeedback, initials, name, isAdmin,
       formatConversationTime, toggleTheme, startDrag, onUpload, onSync, confirmLogout, logout, fileKind,
     }
   },
@@ -225,6 +226,7 @@ export default {
             <button class="topbar-help" type="button" @click="state.helpOpen = true"><span>使用说明</span></button>
             <button class="topbar-help" type="button" @click="openPermissions"><span>我的权限</span></button>
             <button v-if="isAdmin()" class="topbar-help" type="button" @click="openAdmin"><span>管理用户</span></button>
+            <button v-if="isAdmin()" class="topbar-help" type="button" @click="openAdminFeedback"><span>质量看板</span></button>
             <div class="user-menu-wrap">
               <button class="workspace-user user-menu" type="button" @click.stop="state.userMenu = !state.userMenu">
                 <span class="user-avatar"><img v-if="state.profile && state.profile.avatar" :src="state.profile.avatar" alt=""><span v-else>{{ initials(name()) }}</span></span>
@@ -275,6 +277,7 @@ export default {
     </template>
     <doc-modal></doc-modal>
     <admin-modal></admin-modal>
+    <admin-feedback-modal></admin-feedback-modal>
     <permission-modal></permission-modal>
     <profile-modal></profile-modal>
     <help-modal></help-modal>
