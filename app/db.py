@@ -1,6 +1,6 @@
 """SQLite 持久化层。
 
-负责账号与会话、每日额度、对话与回答、反馈与学习记忆、权限申请，
+负责账号与会话、每日额度、对话与回答、反馈与检索轨迹、权限申请，
 以及供 BM25 使用的文档切块索引。
 
 所有表由 init_db() 幂等创建；旧库通过 ALTER TABLE 补列，并在启动时回填对话。
@@ -8,6 +8,7 @@
 """
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import sqlite3
@@ -60,6 +61,43 @@ def _connect():
     return conn
 
 
+def connect():
+    """供 feedback/trace/eval 等独立存储模块复用的连接工厂。"""
+    return _connect()
+
+
+def now():
+    return _now()
+
+
+def _table_exists(conn, name):
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone()
+    return bool(row)
+
+
+def _columns(conn, table):
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _add_column(conn, table, name, ddl):
+    if name not in _columns(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
+def _load_json(value, fallback):
+    try:
+        parsed = json.loads(value or "")
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
+def _dump_json(value):
+    return json.dumps(value, ensure_ascii=False)
+
+
 # ---- 启动建表与迁移 ----
 
 
@@ -110,8 +148,107 @@ def init_db():
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
                 reason TEXT NOT NULL DEFAULT '',
+                sentiment TEXT NOT NULL DEFAULT '',
+                reasons_json TEXT NOT NULL DEFAULT '[]',
+                comment TEXT NOT NULL DEFAULT '',
+                corrected_answer TEXT NOT NULL DEFAULT '',
+                trace_id TEXT,
+                status TEXT NOT NULL DEFAULT 'new',
+                triage_category TEXT NOT NULL DEFAULT '',
+                triage_confidence REAL NOT NULL DEFAULT 0,
+                triage_note TEXT NOT NULL DEFAULT '',
+                triaged_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                triaged_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS feedback_revisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                feedback_id INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+                actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                actor_type TEXT NOT NULL DEFAULT 'user',
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_feedback_revisions_feedback ON feedback_revisions(feedback_id, id);
+            CREATE TABLE IF NOT EXISTS feedback_source_marks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                feedback_id INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+                source_index INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                heading TEXT NOT NULL DEFAULT '',
+                mark TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(feedback_id, source_index, mark)
+            );
+            CREATE TABLE IF NOT EXISTS feedback_triage_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                feedback_id INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+                actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                from_status TEXT NOT NULL DEFAULT '',
+                to_status TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS answer_traces (
+                trace_id TEXT PRIMARY KEY,
+                answer_id INTEGER UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                conversation_id INTEGER REFERENCES conversations(id) ON DELETE SET NULL,
+                question TEXT NOT NULL,
+                queries_json TEXT NOT NULL DEFAULT '[]',
+                retrieval_query TEXT NOT NULL DEFAULT '',
+                query_rewrites INTEGER NOT NULL DEFAULT 0,
+                libraries_json TEXT NOT NULL DEFAULT '[]',
+                grounded INTEGER NOT NULL DEFAULT 0,
+                refusal_reason TEXT NOT NULL DEFAULT '',
+                vector_hits INTEGER NOT NULL DEFAULT 0,
+                bm25_hits INTEGER NOT NULL DEFAULT 0,
+                reranked INTEGER NOT NULL DEFAULT 0,
+                top_k INTEGER NOT NULL DEFAULT 0,
+                best_vector_score REAL,
+                best_bm25_score REAL,
+                best_rerank_score REAL,
+                config_json TEXT NOT NULL DEFAULT '{}',
+                model TEXT NOT NULL DEFAULT '',
+                prompt_version TEXT NOT NULL DEFAULT '',
+                experiment_json TEXT NOT NULL DEFAULT '{}',
+                timings_json TEXT NOT NULL DEFAULT '{}',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_traces_created ON answer_traces(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_traces_user ON answer_traces(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_traces_grounded ON answer_traces(grounded, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_traces_refusal ON answer_traces(refusal_reason, created_at DESC);
+            CREATE TABLE IF NOT EXISTS retrieval_candidates (
+                trace_id TEXT NOT NULL REFERENCES answer_traces(trace_id) ON DELETE CASCADE,
+                rank INTEGER NOT NULL,
+                chunk_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                heading TEXT NOT NULL DEFAULT '',
+                library TEXT NOT NULL DEFAULT '',
+                vector_score REAL,
+                bm25_score REAL,
+                rrf_score REAL,
+                rerank_score REAL,
+                vector_rank INTEGER,
+                bm25_rank INTEGER,
+                rrf_rank INTEGER,
+                selected INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (trace_id, rank)
+            );
+            CREATE INDEX IF NOT EXISTS idx_candidates_chunk ON retrieval_candidates(chunk_id);
+            CREATE INDEX IF NOT EXISTS idx_candidates_source ON retrieval_candidates(source, heading);
+            CREATE INDEX IF NOT EXISTS idx_candidates_library ON retrieval_candidates(library);
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            -- 阶段 1 暂时保留旧表，避免旧代码在新库上启动失败。
+            -- 阶段 3 删除 memory 读写后再移除这两张表的建表语句。
             CREATE TABLE IF NOT EXISTS assistant_memory (
                 user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                 summary TEXT NOT NULL DEFAULT '',
@@ -187,6 +324,43 @@ def init_db():
                 (row["user_id"], _conversation_title(row["question"]), row["created_at"], row["created_at"]),
             )
             conn.execute("UPDATE answers SET conversation_id = ? WHERE id = ?", (cur.lastrowid, row["id"]))
+        # 阶段 1：feedback 从 1-5 星扩展为“情感 + 原因 + 轨迹关联”。
+        # 保留 rating 列，旧数据按 5 星=正向、1-4 星=负向回填。
+        for name, ddl in (
+            ("sentiment", "TEXT NOT NULL DEFAULT ''"),
+            ("reasons_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("comment", "TEXT NOT NULL DEFAULT ''"),
+            ("corrected_answer", "TEXT NOT NULL DEFAULT ''"),
+            ("trace_id", "TEXT"),
+            ("status", "TEXT NOT NULL DEFAULT 'new'"),
+            ("triage_category", "TEXT NOT NULL DEFAULT ''"),
+            ("triage_confidence", "REAL NOT NULL DEFAULT 0"),
+            ("triage_note", "TEXT NOT NULL DEFAULT ''"),
+            ("triaged_by", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
+            ("triaged_at", "TEXT"),
+            ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            _add_column(conn, "feedback", name, ddl)
+        conn.execute(
+            "UPDATE feedback SET sentiment = CASE WHEN rating >= 5 THEN 'positive' ELSE 'negative' END "
+            "WHERE sentiment = ''"
+        )
+        conn.execute("UPDATE feedback SET comment = reason WHERE comment = '' AND reason <> ''")
+        conn.execute(
+            "UPDATE feedback SET reasons_json = '[\"other\"]' "
+            "WHERE sentiment = 'negative' AND reasons_json = '[]'"
+        )
+        conn.execute("UPDATE feedback SET updated_at = created_at WHERE updated_at = ''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback(sentiment, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
+        conn.execute("PRAGMA user_version = 2")
+        conn.execute(
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '2', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (_now(),),
+        )
         for item in PERMISSION_CATALOG:
             conn.execute(
                 "INSERT INTO permission_catalog(permission_key, name, description) VALUES (?, ?, ?) ON CONFLICT(permission_key) DO UPDATE SET name=excluded.name, description=excluded.description",
