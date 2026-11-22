@@ -81,6 +81,7 @@ export const DocModal = {
     const content = ref('')
     const preview = ref(false)
     const extraDirs = ref([])
+    const headingOpen = ref(false)
     const area = ref(null)
     const edit = computed(() => state.docOpen === 'edit')
     const dirs = computed(() => [...new Set([...collectDirs(), ...extraDirs.value])])
@@ -89,6 +90,7 @@ export const DocModal = {
     watch(() => state.docOpen, (mode) => {
       if (!mode) return
       preview.value = false
+      headingOpen.value = false
       extraDirs.value = []
       if (mode === 'edit') {
         const parts = state.currentPath.split('/')
@@ -124,10 +126,8 @@ export const DocModal = {
       content.value = area.value.value
     }
 
-    function heading(event) {
-      const level = Number(event.target.value)
-      event.target.value = ''
-      if (!level) return
+    function chooseHeading(level) {
+      headingOpen.value = false
       applyHeading(area.value, level)
       content.value = area.value.value
     }
@@ -143,42 +143,56 @@ export const DocModal = {
       saveDoc({ edit: edit.value, name: name.value.trim(), dir: dir.value.trim(), content: content.value })
     }
 
-    return { state, name, dir, content, preview, edit, dirs, previewHtml, area, addDir, format, heading, onKey, submit }
+    return { state, name, dir, content, preview, edit, dirs, previewHtml, area, headingOpen, addDir, format, chooseHeading, onKey, submit }
   },
   template: `
     <div v-if="state.docOpen" class="modal-overlay" style="display:flex" @click.self="state.docOpen = false">
-      <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal doc-modal" role="dialog" aria-modal="true">
         <div class="modal-header">
-          <div><span class="modal-eyebrow">MARKDOWN DOCUMENT</span><span>{{ edit ? '编辑文档' : '新建文档' }}</span></div>
+          <div>
+            <span class="modal-eyebrow">MARKDOWN DOCUMENT</span>
+            <span class="modal-title">{{ edit ? '编辑文档' : '新建文档' }}</span>
+            <span v-if="edit" class="modal-path">{{ state.currentPath }}</span>
+          </div>
           <button class="modal-close" type="button" aria-label="关闭" @click="state.docOpen = false">×</button>
         </div>
         <div class="modal-body">
-          <div class="field-grid">
-            <label class="field"><span>标题</span><input v-model="name" type="text" placeholder="如：新员工手册" :disabled="edit"></label>
+          <div v-if="!edit" class="field-grid">
+            <label class="field"><span>标题</span><input v-model="name" type="text" placeholder="如：新员工手册"></label>
             <div class="field">
               <span>目录</span>
               <div class="dir-select-row">
-                <select v-model="dir" :disabled="edit">
+                <select v-model="dir">
                   <option value="">文档库根目录</option>
                   <option v-for="item in dirs" :key="item" :value="item">{{ item }}</option>
                 </select>
-                <button class="dir-new-btn" type="button" :disabled="edit" @click="addDir">新建目录</button>
+                <button class="dir-new-btn" type="button" @click="addDir">新建目录</button>
               </div>
             </div>
           </div>
           <span class="field-label">内容（Markdown）</span>
           <div class="editor-shell">
-            <div class="editor-toolbar" role="toolbar" aria-label="Markdown 编辑工具栏">
-              <select class="editor-select" aria-label="标题层级" @change="heading">
-                <option value="">正文</option>
-                <option v-for="level in 6" :key="level" :value="level">{{ level }} 级标题</option>
-              </select>
-              <button v-for="tool in [['bold','B'],['italic','I'],['strike','S'],['bullet','•'],['ordered','1.'],['code-block','代码'],['link','链接'],['table','表格']]" :key="tool[0]" type="button" class="editor-tool" @click="format(tool[0])">{{ tool[1] }}</button>
+            <div class="editor-toolbar" role="toolbar" aria-label="Markdown 编辑工具栏" @click="headingOpen = false">
+              <div class="editor-heading" @click.stop>
+                <button type="button" class="editor-mode-btn" :aria-expanded="headingOpen" aria-label="标题层级" @click="headingOpen = !headingOpen">标题</button>
+                <div v-if="headingOpen" class="editor-heading-menu" role="listbox">
+                  <button v-for="level in 6" :key="level" type="button" class="editor-heading-item" role="option" @click="chooseHeading(level)">{{ level }} 级标题</button>
+                </div>
+              </div>
+              <span class="editor-divider" aria-hidden="true"></span>
+              <button type="button" class="editor-tool strong" @click="format('bold')">B</button>
+              <button type="button" class="editor-tool italic" @click="format('italic')">I</button>
+              <button type="button" class="editor-tool strike" @click="format('strike')">S</button>
+              <button type="button" class="editor-tool" @click="format('bullet')">•</button>
+              <button type="button" class="editor-tool" @click="format('ordered')">1.</button>
+              <button type="button" class="editor-tool" @click="format('code-block')">代码</button>
+              <button type="button" class="editor-tool" @click="format('link')">链接</button>
+              <button type="button" class="editor-tool" @click="format('table')">表格</button>
               <span class="editor-toolbar-spacer"></span>
               <button type="button" class="editor-mode-btn" @click="preview = !preview">{{ preview ? '源码' : '预览' }}</button>
             </div>
             <div class="editor-surface">
-              <textarea v-show="!preview" ref="area" v-model="content" rows="16" placeholder="开始写作，或使用上方工具栏插入标题、列表、代码和表格…" @keydown="onKey"></textarea>
+              <textarea v-show="!preview" ref="area" v-model="content" placeholder="开始写作，或使用上方工具栏插入标题、列表、代码和表格…" @focus="headingOpen = false" @keydown="onKey"></textarea>
               <div v-show="preview" class="editor-preview markdown" v-html="previewHtml"></div>
             </div>
             <div class="editor-status"><span>{{ preview ? 'Markdown 预览' : 'Markdown 源码' }}</span><span><kbd>Ctrl</kbd> + <kbd>S</kbd> 保存</span></div>
