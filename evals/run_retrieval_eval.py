@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from evals.lib.config import apply_config  # noqa: E402
 from evals.lib.dataset import load_cases  # noqa: E402
 from evals.lib.report import print_comparison, print_summary, write_json  # noqa: E402
 from evals.lib.runner import aggregate, evaluate_retrieval  # noqa: E402
@@ -37,24 +38,6 @@ def _load_config(value):
     if not isinstance(data, dict):
         raise ValueError("--config 必须是 JSON 对象")
     return data
-
-
-def _apply_config(config, overrides):
-    applied = {}
-    for key, value in overrides.items():
-        if not hasattr(config, key):
-            continue
-        current = getattr(config, key)
-        if isinstance(current, bool):
-            applied[key] = bool(value)
-        elif isinstance(current, int) and not isinstance(current, bool):
-            applied[key] = int(value)
-        elif isinstance(current, float):
-            applied[key] = float(value)
-        else:
-            applied[key] = value
-        setattr(config, key, applied[key])
-    return applied
 
 
 def main():
@@ -92,19 +75,24 @@ def main():
 
     requested = _load_config(args.config)
     applied = {}
+    evidence_top_k = None
     if args.dry_run:
         search = lambda question, library: []  # noqa: E731
         evidence = None
     else:
         from app import config, rag  # noqa: E402
 
-        applied = _apply_config(config, requested)
+        applied = apply_config(config, requested)
         search = lambda question, library: rag._hybrid_search(  # noqa: E731
             question, [library] if library else []
         )
         evidence = None if args.no_evidence else rag._has_grounded_evidence
+        # 与运行时一致：证据只看最终交给模型的 RERANK_TOP_K 段，而不是全部 12 条。
+        evidence_top_k = None if args.no_evidence else config.RERANK_TOP_K
 
-    results = evaluate_retrieval(cases, search, evidence, args.k, args.match)
+    results = evaluate_retrieval(
+        cases, search, evidence, args.k, args.match, evidence_top_k=evidence_top_k
+    )
     summary = aggregate(results)
 
     payload = {

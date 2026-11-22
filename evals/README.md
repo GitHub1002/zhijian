@@ -68,6 +68,11 @@ pip install -r evals/requirements-eval.txt
 python evals/run_ragas_eval.py \
   --dataset evals/datasets/seed_v1.jsonl --limit 20 --provider ragas
 
+# 参数扫描：同一组检索参数只跑一次，门槛在缓存结果上复用
+python evals/run_sweep.py \
+  --dataset evals/datasets/seed_v1.jsonl --limit 25 --include-hard-negatives
+# 输出 data/eval/sweep.json 和 data/eval/sweep.csv（已 gitignore）
+
 # 阈值门禁
 python evals/check_thresholds.py \
   --baseline evals/configs/baseline_rerank_gate.json \
@@ -97,8 +102,15 @@ RAG 指标（LLM Judge / RAGAS）：`faithfulness`、`answer_relevancy`、`conte
 # 扫描重排门槛，观察可回答/不可回答样本的取舍
 python evals/run_retrieval_eval.py \
   --dataset evals/datasets/seed_v1.jsonl --k 5 \
-  --config '{"MIN_RERANK_SCORE": 0.5}' --compare evals/reports/baseline.json
+  --config '{"MIN_RERANK_SCORE": 0.5}' \
+  --compare evals/configs/baseline_rerank_gate.json
 ```
+
+### 参数扫描结论（seed_v1，2026-11-22）
+
+- 30 条分层样本（25 可回答 + 5 不可回答）上，`RRF_K` 20/60/100、`HYBRID_TOP_K` 8/12/20 在 hit@3/5、recall@5、MRR 上完全一致。重排模型会重新排序同一批候选，融合参数在这份语料上没有区分度，保持默认 `RRF_K=60`、`HYBRID_TOP_K=12`。
+- 用完整 55 条已保存的重排分数回算，`MIN_RERANK_SCORE` 在 `(-4.2647, 0.5630]` 内都能做到 5/5 正确拒答、50/50 不误拒。默认 `0.0` 位于安全区间内；`1.0` 开始误拒 1 条，`2.0` 误拒 5 条，`-7.0` 会误答 4 条。
+- 结论：暂不改运行时默认值；语料或嵌入/重排模型变化后按同一脚本复测。
 
 ## 评测隔离
 

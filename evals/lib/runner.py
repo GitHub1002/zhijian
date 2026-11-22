@@ -4,10 +4,42 @@ import time
 from . import metrics
 
 
+def _evaluate_case(case, retrieved, evidence, k_values, match, latency_ms, error=""):
+    top = list(retrieved)[: max(k_values)]
+    row = {
+        "case_id": case["case_id"],
+        "question": case["question"],
+        "library": case["library"],
+        "answerable": case["answerable"],
+        "hard_negative": case["hard_negative"],
+        "expected_sources": case["expected_sources"],
+        "retrieved": top[:12],
+        "latency_ms": latency_ms,
+        "error": error,
+        "metrics": {},
+    }
+    if case["answerable"] and case["expected_sources"]:
+        row["metrics"] = metrics.evaluate_case(
+            top, case["expected_sources"], k_values, match
+        )
+    if evidence is not None:
+        try:
+            row["grounded"] = bool(evidence(case["question"], top))
+        except Exception:
+            row["grounded"] = None
+    return row
+
+
+def _wrap_evidence(evidence, evidence_top_k):
+    if evidence is None or evidence_top_k is None:
+        return evidence
+    return lambda question, top: evidence(question, list(top)[:evidence_top_k])
+
+
 def evaluate_retrieval(cases, search, evidence=None, k_values=(3, 5, 12),
-                       match="source_heading"):
+                       match="source_heading", evidence_top_k=None):
+    evidence = _wrap_evidence(evidence, evidence_top_k)
     results = []
-    top_k = max(k_values)
     for case in cases:
         started = time.perf_counter()
         error = ""
@@ -17,31 +49,31 @@ def evaluate_retrieval(cases, search, evidence=None, k_values=(3, 5, 12),
             retrieved = []
             error = f"{type(exc).__name__}: {exc}"
         latency_ms = int((time.perf_counter() - started) * 1000)
-        top = retrieved[:top_k]
-
-        row = {
-            "case_id": case["case_id"],
-            "question": case["question"],
-            "library": case["library"],
-            "answerable": case["answerable"],
-            "hard_negative": case["hard_negative"],
-            "expected_sources": case["expected_sources"],
-            "retrieved": top[:12],
-            "latency_ms": latency_ms,
-            "error": error,
-            "metrics": {},
-        }
-        if case["answerable"] and case["expected_sources"]:
-            row["metrics"] = metrics.evaluate_case(
-                top, case["expected_sources"], k_values, match
-            )
-        if evidence is not None:
-            try:
-                row["grounded"] = bool(evidence(case["question"], top))
-            except Exception:
-                row["grounded"] = None
-        results.append(row)
+        results.append(
+            _evaluate_case(case, retrieved, evidence, k_values, match, latency_ms, error)
+        )
     return results
+
+
+def evaluate_cached(cases, retrieved_by_case, evidence=None, k_values=(3, 5, 12),
+                    match="source_heading", evidence_top_k=None, latencies=None,
+                    errors=None):
+    """在已缓存的检索结果上评估，用于参数扫描时复用同一次检索。"""
+    evidence = _wrap_evidence(evidence, evidence_top_k)
+    latencies = latencies or {}
+    errors = errors or {}
+    return [
+        _evaluate_case(
+            case,
+            retrieved_by_case.get(case["case_id"], []),
+            evidence,
+            k_values,
+            match,
+            latencies.get(case["case_id"], 0),
+            errors.get(case["case_id"], ""),
+        )
+        for case in cases
+    ]
 
 
 def aggregate(results):
