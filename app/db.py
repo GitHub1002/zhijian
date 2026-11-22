@@ -661,13 +661,161 @@ def answer_for_user(answer_id, user_id):
         ).fetchone()
 
 
-def save_feedback(answer_id, user_id, rating, reason):
-    with _connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO feedback(answer_id, user_id, rating, reason, created_at) VALUES (?, ?, ?, ?, ?)",
-            (answer_id, user_id, rating, reason, _now()),
+def _feedback_dict(conn, row):
+    item = dict(row)
+    item["reasons"] = _load_json(item.pop("reasons_json", "[]"), [])
+    item["source_marks"] = [
+        dict(mark)
+        for mark in conn.execute(
+            """SELECT source_index, source, heading, mark
+               FROM feedback_source_marks WHERE feedback_id = ? ORDER BY source_index""",
+            (row["id"],),
+        ).fetchall()
+    ]
+    return item
+
+
+def _insert_source_marks(conn, feedback_id, sources_json, marks, now):
+    sources = _load_json(sources_json, [])
+    for mark in marks or []:
+        index = int(mark.get("source_index") or 0)
+        if index < 1 or index > len(sources):
+            continue
+        source = sources[index - 1] or {}
+        conn.execute(
+            """INSERT OR IGNORE INTO feedback_source_marks(
+                feedback_id, source_index, source, heading, mark, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                feedback_id,
+                index,
+                source.get("source", ""),
+                source.get("heading", ""),
+                mark.get("mark", ""),
+                now,
+            ),
         )
-        return cur.lastrowid
+
+
+def _trace_id_for_answer(conn, answer_id):
+    row = conn.execute(
+        "SELECT trace_id FROM answer_traces WHERE answer_id = ?", (answer_id,)
+    ).fetchone()
+    return row["trace_id"] if row else None
+
+
+def save_feedback(answer_id, user_id, rating, reason="", *, sentiment="", reasons=None,
+                  comment="", corrected_answer="", source_marks=None):
+    """兼容旧调用的同时写入情感、原因和来源标记。"""
+    now = _now()
+    sentiment = sentiment or ("positive" if rating is not None and rating >= 5 else "negative")
+    rating = int(rating) if rating is not None else (5 if sentiment == "positive" else 1)
+    comment = comment or reason or ""
+    with _connect() as conn:
+        answer = conn.execute(
+            "SELECT sources_json FROM answers WHERE id = ? AND user_id = ?",
+            (answer_id, user_id),
+        ).fetchone()
+        if not answer:
+            return None
+        trace_id = _trace_id_for_answer(conn, answer_id)
+        cur = conn.execute(
+            """INSERT INTO feedback(
+                answer_id, user_id, rating, reason, sentiment, reasons_json, comment,
+                corrected_answer, trace_id, status, updated_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)""",
+            (
+                answer_id,
+                user_id,
+                rating,
+                reason,
+                sentiment,
+                _dump_json(list(reasons or [])),
+                comment,
+                corrected_answer,
+                trace_id,
+                now,
+                now,
+            ),
+        )
+        feedback_id = cur.lastrowid
+        _insert_source_marks(conn, feedback_id, answer["sources_json"], source_marks, now)
+        return feedback_id
+
+
+def get_feedback(feedback_id, user_id=None):
+    with _connect() as conn:
+        sql = "SELECT * FROM feedback WHERE id = ?"
+        params = [feedback_id]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params.append(user_id)
+        row = conn.execute(sql, params).fetchone()
+        return _feedback_dict(conn, row) if row else None
+
+
+def get_feedback_by_answer(answer_id, user_id=None):
+    with _connect() as conn:
+        sql = "SELECT * FROM feedback WHERE answer_id = ?"
+        params = [answer_id]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params.append(user_id)
+        row = conn.execute(sql, params).fetchone()
+        return _feedback_dict(conn, row) if row else None
+
+
+def update_feedback(feedback_id, user_id, *, sentiment=None, reasons=None, comment=None,
+                    corrected_answer=None, source_marks=None):
+    """修改本人反馈；每次修改前把旧值写入 feedback_revisions。"""
+    now = _now()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM feedback WHERE id = ? AND user_id = ?", (feedback_id, user_id)
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            """INSERT INTO feedback_revisions(
+                feedback_id, actor_id, actor_type, snapshot_json, created_at
+            ) VALUES (?, ?, 'user', ?, ?)""",
+            (feedback_id, user_id, _dump_json(dict(row)), now),
+        )
+        updates = {"updated_at": now}
+        if sentiment is not None:
+            updates["sentiment"] = sentiment
+            updates["rating"] = 5 if sentiment == "positive" else 1
+        if reasons is not None:
+            updates["reasons_json"] = _dump_json(list(reasons))
+        if comment is not None:
+            updates["comment"] = comment
+        if corrected_answer is not None:
+            updates["corrected_answer"] = corrected_answer
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        conn.execute(
+            f"UPDATE feedback SET {assignments} WHERE id = ?",
+            [*updates.values(), feedback_id],
+        )
+        if source_marks is not None:
+            conn.execute(
+                "DELETE FROM feedback_source_marks WHERE feedback_id = ?", (feedback_id,)
+            )
+            answer = conn.execute(
+                "SELECT sources_json FROM answers WHERE id = ?", (row["answer_id"],)
+            ).fetchone()
+            if answer:
+                _insert_source_marks(conn, feedback_id, answer["sources_json"], source_marks, now)
+        updated = conn.execute("SELECT * FROM feedback WHERE id = ?", (feedback_id,)).fetchone()
+        return _feedback_dict(conn, updated)
+
+
+def set_feedback_triage(feedback_id, category, confidence=0.0, note=""):
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE feedback SET triage_category = ?, triage_confidence = ?,
+               triage_note = ?, updated_at = ? WHERE id = ?""",
+            (category, float(confidence or 0), note or "", _now(), feedback_id),
+        )
 
 
 def get_memory(user_id):

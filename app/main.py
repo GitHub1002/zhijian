@@ -8,8 +8,10 @@ import json
 import re
 import sqlite3
 import mimetypes
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -18,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import config, db, documents, ingest, llm, md_render, rag
+from . import config, db, documents, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # 字体与常用前端资源的 MIME 修正，避免被识别为 octet-stream 导致浏览器拒绝加载
@@ -39,10 +41,29 @@ class AskRequest(BaseModel):
     conversation_id: Optional[int] = None
 
 
+class FeedbackSourceMark(BaseModel):
+    source_index: int = Field(ge=1, le=50)
+    mark: Literal["wrong_citation", "irrelevant", "outdated", "missing_context"]
+
+
 class FeedbackRequest(BaseModel):
     answer_id: int
-    rating: int = Field(ge=1, le=5)
-    reason: str = ""
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    sentiment: Optional[Literal["positive", "negative"]] = None
+    reasons: list[str] = Field(default_factory=list)
+    comment: str = Field(default="", max_length=2000)
+    corrected_answer: str = Field(default="", max_length=4000)
+    source_marks: list[FeedbackSourceMark] = Field(default_factory=list, max_length=20)
+    reason: str = Field(default="", max_length=2000)
+    client_version: str = Field(default="", max_length=40)
+
+
+class FeedbackUpdateRequest(BaseModel):
+    sentiment: Optional[Literal["positive", "negative"]] = None
+    reasons: Optional[list[str]] = None
+    comment: Optional[str] = Field(default=None, max_length=2000)
+    corrected_answer: Optional[str] = Field(default=None, max_length=4000)
+    source_marks: Optional[list[FeedbackSourceMark]] = None
 
 
 class DocRequest(BaseModel):
@@ -335,11 +356,13 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
     # 到这里检索和拒答都已结束。下面只把有依据的回答逐段推给页面，流结束后才扣次数。
     def events():
         parts = []
+        started = time.perf_counter()
         try:
             for token in llm.generate_stream(rag.SYSTEM_PROMPT, prepared["user_prompt"]):
                 parts.append(token)
                 yield _sse({"token": token}, event="token")
-            result = rag.persist_prepared(prepared, "".join(parts))
+            generation_ms = int((time.perf_counter() - started) * 1000)
+            result = rag.persist_prepared(prepared, "".join(parts), generation_ms=generation_ms)
             if business:
                 result["quota"] = db.consume_quota(user["id"]) or db.quota_status(user["id"])
             else:
@@ -357,24 +380,105 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
 
 @app.post("/api/feedback")
 def feedback(req: FeedbackRequest, user=Depends(current_user)):
-    # 低分必须填原因；唯一约束保证一条回答只能评价一次。
-    # learn_from_feedback 只吞掉模型调用异常并写入兜底策略；数据库异常仍会让请求失败。
-    reason = req.reason.strip()
-    if req.rating < 5 and len(reason) < 10:
-        raise HTTPException(status_code=422, detail="5 星以下请填写至少 10 个字符的原因")
     answer = db.answer_for_user(req.answer_id, user["id"])
     if not answer:
         raise HTTPException(status_code=404, detail="找不到这条回答")
+    sources = _sources_from_json(answer["sources_json"])
     try:
-        feedback_id = db.save_feedback(req.answer_id, user["id"], req.rating, reason)
+        normalized = feedback_rules.normalize(req.model_dump(), sources)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    try:
+        feedback_id = db.save_feedback(
+            req.answer_id,
+            user["id"],
+            normalized["rating"],
+            req.reason or "",
+            sentiment=normalized["sentiment"],
+            reasons=normalized["reasons"],
+            comment=normalized["comment"],
+            corrected_answer=normalized["corrected_answer"],
+            source_marks=normalized["source_marks"],
+        )
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="这条回答已经评价过了")
+    if feedback_id is None:
+        raise HTTPException(status_code=404, detail="找不到这条回答")
+    trace = tracing.get_trace_by_answer(req.answer_id)
+    category, confidence, note = feedback_rules.classify(normalized, trace)
+    db.set_feedback_triage(feedback_id, category, confidence, note)
     learning = None
-    if req.rating < 5:
+    if normalized["sentiment"] == "negative":
         learning = rag.learn_from_feedback(
-            user["id"], feedback_id, answer["question"], answer["answer"], req.rating, reason
+            user["id"],
+            feedback_id,
+            answer["question"],
+            answer["answer"],
+            normalized["rating"],
+            normalized["comment"] or req.reason,
         )
-    return {"ok": True, "learning": learning}
+    return {
+        "ok": True,
+        "feedback": db.get_feedback(feedback_id, user["id"]),
+        "learning": learning,
+    }
+
+
+@app.patch("/api/feedback/{feedback_id}")
+def update_feedback(feedback_id: int, req: FeedbackUpdateRequest, user=Depends(current_user)):
+    current = db.get_feedback(feedback_id, user["id"])
+    if not current:
+        raise HTTPException(status_code=404, detail="找不到这条反馈")
+    created = datetime.fromisoformat(current["created_at"])
+    if datetime.now(timezone.utc) - created > timedelta(hours=config.FEEDBACK_EDIT_WINDOW_HOURS):
+        raise HTTPException(status_code=403, detail="反馈已超过可修改时间")
+    answer = db.answer_for_user(current["answer_id"], user["id"])
+    if not answer:
+        raise HTTPException(status_code=404, detail="找不到这条回答")
+    sources = _sources_from_json(answer["sources_json"])
+    payload = req.model_dump()
+    sentiment = payload.get("sentiment") or current["sentiment"]
+    merged = {
+        "sentiment": sentiment,
+        "rating": 5 if sentiment == "positive" else 1,
+        "reasons": payload.get("reasons") if payload.get("reasons") is not None else current["reasons"],
+        "comment": payload.get("comment") if payload.get("comment") is not None else current["comment"],
+        "corrected_answer": (
+            payload.get("corrected_answer")
+            if payload.get("corrected_answer") is not None
+            else current["corrected_answer"]
+        ),
+        "source_marks": (
+            payload.get("source_marks")
+            if payload.get("source_marks") is not None
+            else current["source_marks"]
+        ),
+    }
+    try:
+        normalized = feedback_rules.normalize(merged, sources)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    updated = db.update_feedback(
+        feedback_id,
+        user["id"],
+        sentiment=normalized["sentiment"],
+        reasons=normalized["reasons"],
+        comment=normalized["comment"],
+        corrected_answer=normalized["corrected_answer"],
+        source_marks=normalized["source_marks"],
+    )
+    trace = tracing.get_trace_by_answer(current["answer_id"])
+    category, confidence, note = feedback_rules.classify(normalized, trace)
+    db.set_feedback_triage(feedback_id, category, confidence, note)
+    return {"ok": True, "feedback": updated}
+
+
+@app.get("/api/feedback/answer/{answer_id}")
+def get_answer_feedback(answer_id: int, user=Depends(current_user)):
+    answer = db.answer_for_user(answer_id, user["id"])
+    if not answer:
+        raise HTTPException(status_code=404, detail="找不到这条回答")
+    return {"feedback": db.get_feedback_by_answer(answer_id, user["id"])}
 
 
 def _sources_from_json(raw):

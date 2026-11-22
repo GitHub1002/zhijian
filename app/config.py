@@ -40,6 +40,11 @@ RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 MIN_VECTOR_SCORE = float(os.getenv("MIN_VECTOR_SCORE", "0.35"))
 RAG_QUERY_REWRITE_LIMIT = max(0, min(int(os.getenv("RAG_QUERY_REWRITE_LIMIT", "0")), 1))
 
+# 反馈编辑窗口与轨迹保留期。反馈只做轻量校验，不在这里调用大模型。
+FEEDBACK_EDIT_WINDOW_HOURS = int(os.getenv("FEEDBACK_EDIT_WINDOW_HOURS", "168"))
+FEEDBACK_DAILY_LIMIT = int(os.getenv("FEEDBACK_DAILY_LIMIT", "50"))
+TRACE_RETENTION_DAYS = int(os.getenv("TRACE_RETENTION_DAYS", "180"))
+
 # 相对路径统一按项目根目录解析，保证从任何工作目录启动都能找到 data/ 和 docs/。
 QDRANT_PATH = (BASE_DIR / QDRANT_PATH) if not os.path.isabs(QDRANT_PATH) else Path(QDRANT_PATH)
 DOCS_DIR = (BASE_DIR / DOCS_DIR) if not os.path.isabs(DOCS_DIR) else Path(DOCS_DIR)

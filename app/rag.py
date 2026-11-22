@@ -5,8 +5,9 @@
 """
 import json
 import re
+import time
 
-from . import config, db, embedder, llm, md_render, store
+from . import config, db, embedder, llm, md_render, store, tracing
 
 # 提示词是行为约束的一部分：只允许引用给定编号，证据不足必须拒答。
 # 修改时要同步 README 里的“反幻觉”说明。
@@ -63,7 +64,10 @@ def _rerank(question, candidates):
         # 兜底分 = 词面重合 + RRF，与模型分不可跨批比较；这里只用于同一批候选内部排序。
         for item in candidates:
             item["rerank_score"] = _lexical_score(question, item["text"]) + item.get("rrf_score", 0.0)
-    return sorted(candidates, key=lambda item: item.get("rerank_score", 0), reverse=True)
+    ordered = sorted(candidates, key=lambda item: item.get("rerank_score", 0), reverse=True)
+    for rank, item in enumerate(ordered, start=1):
+        item["rerank_rank"] = rank
+    return ordered
 
 
 def _hybrid_search(question, libraries):
@@ -85,6 +89,7 @@ def _hybrid_search(question, libraries):
             "vector_score": float(point.score), "bm25_score": None, "rrf_score": 0.0,
         })
         candidates[chunk_id]["vector_score"] = float(point.score)
+        candidates[chunk_id]["vector_rank"] = rank
         candidates[chunk_id]["rrf_score"] += 1 / (config.RRF_K + rank)
     for rank, row in enumerate(bm25_hits, start=1):
         item = candidates.setdefault(row["chunk_id"], {
@@ -93,13 +98,81 @@ def _hybrid_search(question, libraries):
             "vector_score": None, "bm25_score": None, "rrf_score": 0.0,
         })
         item["bm25_score"] = float(row["bm25_score"])
+        item["bm25_rank"] = rank
         item["rrf_score"] += 1 / (config.RRF_K + rank)
     ranked = sorted(candidates.values(), key=lambda item: item["rrf_score"], reverse=True)
+    for rank, item in enumerate(ranked, start=1):
+        item["rrf_rank"] = rank
     return _rerank(question, ranked[: max(config.HYBRID_TOP_K, config.RERANK_TOP_K * 3)])
 
 
 def _source_label(item):
     return f"{item['source']}" + (f" > {item['heading']}" if item.get("heading") else "")
+
+
+def _rounded(value):
+    return round(float(value), 4) if value is not None else None
+
+
+def _source_dict(index, item):
+    last = item.get("heading", "").split(" > ")[-1] if item.get("heading") else ""
+    # anchor 取标题路径的最后一段，并复用 md_render.slugify。
+    # 前端按这个 id 在重新渲染的文档里找标题，必须和 toc 扩展的 slugify 一致。
+    anchor = md_render.slugify(last) if last else ""
+    rerank_score = item.get("rerank_score")
+    return {
+        "index": index,
+        "source": item["source"],
+        "heading": item.get("heading", ""),
+        "anchor": anchor,
+        "library": item.get("library", ""),
+        "chunk_id": item.get("chunk_id", ""),
+        "score": round(float(rerank_score), 4) if rerank_score is not None else 0.0,
+        "rerank_score": _rounded(rerank_score),
+        "vector_score": round(float(item.get("vector_score") or 0), 4),
+        "bm25_score": _rounded(item.get("bm25_score")),
+        "rrf_score": _rounded(item.get("rrf_score")),
+    }
+
+
+def _prepare_ms(state):
+    started = state.get("started_at")
+    return int((time.perf_counter() - started) * 1000) if started else None
+
+
+def _timings(state):
+    value = _prepare_ms(state)
+    return {"prepare_ms": value} if value is not None else {}
+
+
+def _trace_queries(state):
+    original = state.get("question") or ""
+    rewritten = state.get("retrieval_query") or ""
+    queries = [original]
+    if rewritten and rewritten != original:
+        queries.append(rewritten)
+    return queries
+
+
+def _record_trace(state, answer_id, grounded, refusal_reason="", timings=None):
+    conversation_id = (
+        db.conversation_id_for_answer(answer_id) if answer_id else state.get("conversation_id")
+    )
+    return tracing.record_safely(
+        answer_id=answer_id,
+        user_id=state.get("user_id"),
+        conversation_id=conversation_id,
+        question=state.get("question", ""),
+        queries=_trace_queries(state),
+        retrieval_query=state.get("retrieval_query") or state.get("question", ""),
+        query_rewrites=state.get("rewrite_count", 0),
+        libraries=state.get("libraries", []),
+        grounded=grounded,
+        refusal_reason=refusal_reason,
+        ranked=state.get("ranked", []),
+        top=state.get("top", []),
+        timings=timings if timings is not None else state.get("timings", {}),
+    )
 
 
 def _has_grounded_evidence(question, top):
@@ -147,7 +220,8 @@ def _retrieval_metrics(libraries, ranked, top, query_rewrites=0):
     }
 
 
-def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_id=None):
+def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_id=None,
+             ranked=None, top=None, queries=None, timings=None):
     # 拒答也写入 answers，保证历史对话完整；sources 为空、grounded=False。
     messages = {
         "no_approved_permission": (
@@ -161,9 +235,27 @@ def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_
     }
     answer = messages.get(reason, "当前授权知识库没有足够依据，暂不作答。")
     answer_id = db.create_answer(user_id, question, answer, "[]", conversation_id)
+    conv_id = db.conversation_id_for_answer(answer_id)
+    trace_queries = queries or [question]
+    trace_id = tracing.record_safely(
+        answer_id=answer_id,
+        user_id=user_id,
+        conversation_id=conv_id,
+        question=question,
+        queries=trace_queries,
+        retrieval_query=question,
+        query_rewrites=max(0, len(trace_queries) - 1),
+        libraries=libraries,
+        grounded=False,
+        refusal_reason=reason,
+        ranked=ranked or [],
+        top=top or [],
+        timings=timings or {},
+    )
     return {
         "answer_id": answer_id,
-        "conversation_id": db.conversation_id_for_answer(answer_id),
+        "conversation_id": conv_id,
+        "trace_id": trace_id,
         "answer": answer, "answer_html": md_render.render(answer), "sources": [],
         "memory_active": False, "grounded": False, "refusal_reason": reason,
         "retrieval": retrieval or {"libraries": libraries, "vector_hits": 0, "bm25_hits": 0, "reranked": 0},
@@ -189,18 +281,13 @@ def _ask_legacy(question, user_id):
         return _refusal(
             question, user_id, libraries, "no_grounded_evidence",
             _retrieval_metrics(libraries, ranked, top, rewrite_count),
+            ranked=ranked, top=top,
+            queries=[question] + ([rewritten] if rewrite_count else []),
         )
     sources = []
     context_parts = []
     for index, item in enumerate(top, start=1):
-        last = item.get("heading", "").split(" > ")[-1] if item.get("heading") else ""
-        # anchor 规则同 _graph_ground：必须与 md_render 的 toc slugify 一致。
-        anchor = md_render.slugify(last) if last else ""
-        sources.append({
-            "index": index, "source": item["source"], "heading": item.get("heading", ""),
-            "anchor": anchor, "library": item.get("library", ""), "score": round(float(item.get("rerank_score", 0)), 4),
-            "vector_score": round(float(item.get("vector_score") or 0), 4),
-        })
+        sources.append(_source_dict(index, item))
         context_parts.append(f"[{index}]【知识库: {item.get('library', '')} | 来源: {_source_label(item)}】\n{item['text']}")
     context = "\n\n---\n\n".join(context_parts)
     memory = db.get_memory(user_id)
@@ -215,9 +302,24 @@ def _ask_legacy(question, user_id):
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
     answer = llm.generate(SYSTEM_PROMPT, user_prompt)
     answer_id = db.create_answer(user_id, question, answer, json.dumps(sources, ensure_ascii=False))
+    conversation_id = db.conversation_id_for_answer(answer_id)
+    trace_id = _record_trace(
+        {
+            "user_id": user_id,
+            "question": question,
+            "retrieval_query": rewritten if rewrite_count else question,
+            "rewrite_count": rewrite_count,
+            "libraries": libraries,
+            "ranked": ranked,
+            "top": top,
+        },
+        answer_id,
+        True,
+    )
     return {
         "answer_id": answer_id,
-        "conversation_id": db.conversation_id_for_answer(answer_id),
+        "conversation_id": conversation_id,
+        "trace_id": trace_id,
         "answer": answer, "answer_html": md_render.render(answer), "sources": sources,
         "memory_active": bool(memory), "grounded": True,
         "retrieval": {"libraries": libraries, "vector_hits": len([x for x in ranked if x.get("vector_score") is not None]),
@@ -291,6 +393,7 @@ def _graph_authorize(state):
             "result": _refusal(
                 state["question"], state["user_id"], [], "no_approved_permission",
                 conversation_id=state.get("conversation_id"),
+                timings=_timings(state),
             ),
         }
     return {"libraries": libraries, "stop": False}
@@ -319,25 +422,17 @@ def _graph_ground(state):
                     state.get("rewrite_count", 0),
                 ),
                 conversation_id=state.get("conversation_id"),
+                ranked=state.get("ranked", []),
+                top=top,
+                queries=_trace_queries(state),
+                timings=_timings(state),
             ),
         }
 
     sources = []
     context_parts = []
     for index, item in enumerate(top, start=1):
-        last = item.get("heading", "").split(" > ")[-1] if item.get("heading") else ""
-        # anchor 取标题路径的最后一段，并复用 md_render.slugify。
-        # 前端按这个 id 在重新渲染的文档里找标题，必须和 toc 扩展的 slugify 一致。
-        anchor = md_render.slugify(last) if last else ""
-        sources.append({
-            "index": index,
-            "source": item["source"],
-            "heading": item.get("heading", ""),
-            "anchor": anchor,
-            "library": item.get("library", ""),
-            "score": round(float(item.get("rerank_score", 0)), 4),
-            "vector_score": round(float(item.get("vector_score") or 0), 4),
-        })
+        sources.append(_source_dict(index, item))
         context_parts.append(
             f"[{index}]【知识库: {item.get('library', '')} | 来源: {_source_label(item)}】\n{item['text']}"
         )
@@ -360,6 +455,10 @@ def _graph_rewrite(state):
                 state.get("rewrite_count", 0),
             ),
             conversation_id=state.get("conversation_id"),
+            ranked=state.get("ranked", []),
+            top=state.get("top", []),
+            queries=_trace_queries(state),
+            timings=_timings(state),
         )
         return {"stop": True, "needs_rewrite": False, "result": result}
     return {
@@ -394,7 +493,12 @@ def prepare(question, user_id, conversation_id=None):
     - 可生成：ready=True，带 user_prompt，由调用方流式生成后再调用 persist_prepared。
     这样 HTTP 层不需要再理解检索细节。
     """
-    state = {"question": question, "user_id": user_id, "conversation_id": conversation_id}
+    state = {
+        "question": question,
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "started_at": time.perf_counter(),
+    }
     state.update(_graph_authorize(state))
     if state.get("stop"):
         return state["result"]
@@ -415,14 +519,18 @@ def prepare(question, user_id, conversation_id=None):
     user_prompt, memory = _prompt_for_state(state)
     state["user_prompt"] = user_prompt
     state["memory"] = memory
+    state["timings"] = {"prepare_ms": int((time.perf_counter() - state["started_at"]) * 1000)}
     state["ready"] = True
     return state
 
 
-def persist_prepared(state, answer):
+def persist_prepared(state, answer, generation_ms=None):
     # 与 prepare 配对：生成结束后统一落库并组装 answer_html/sources/retrieval。
     # 流式接口必须在发送 done 之前调用，保证前端拿到的 answer_id 可以评价。
-    return _graph_persist({**state, "answer": answer})["result"]
+    timings = dict(state.get("timings") or {})
+    if generation_ms is not None:
+        timings["generation_ms"] = int(generation_ms)
+    return _graph_persist({**state, "answer": answer, "timings": timings})["result"]
 
 
 def _graph_generate(state):
@@ -439,10 +547,13 @@ def _graph_persist(state):
         state["user_id"], state["question"], answer, json.dumps(sources, ensure_ascii=False),
         state.get("conversation_id"),
     )
+    conversation_id = db.conversation_id_for_answer(answer_id)
+    trace_id = _record_trace(state, answer_id, True)
     return {
         "result": {
             "answer_id": answer_id,
-            "conversation_id": db.conversation_id_for_answer(answer_id),
+            "conversation_id": conversation_id,
+            "trace_id": trace_id,
             "answer": answer,
             "answer_html": md_render.render(answer),
             "sources": sources,
