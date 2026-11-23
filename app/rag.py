@@ -7,7 +7,7 @@ import json
 import re
 import time
 
-from . import config, db, embedder, llm, md_render, store, tracing
+from . import config, curated_store, db, embedder, llm, md_render, store, tracing
 
 # 提示词是行为约束的一部分：只允许引用给定编号，证据不足必须拒答。
 # 修改时要同步 README 里的“反幻觉”说明。
@@ -315,6 +315,7 @@ def _ask_legacy(question, user_id):
     user_prompt = (
         f"问题：{question}\n\n"
         f"最近问题（仅保持上下文，不可作为事实来源）：\n{recent_text or '无'}\n\n"
+        f"{_fewshot_block({'libraries': libraries})}"
         f"参考资料（只能引用这些编号）：\n{context}"
     )
     if not config.DEEPSEEK_API_KEY:
@@ -460,6 +461,25 @@ def _graph_rewrite(state):
     }
 
 
+def _fewshot_block(state):
+    # 只在全局开关打开、且示例已审核时注入；示例不是事实来源，也不是引用编号。
+    if not config.CURATED_FEWSHOT_ENABLED:
+        return ""
+    examples = curated_store.approved_examples(
+        config.CURATED_FEWSHOT_LIMIT, state.get("libraries") or []
+    )
+    if not examples:
+        return ""
+    text = "\n\n".join(
+        f"示例问题：{item['question']}\n示例回答：{item['answer']}"
+        for item in examples
+    )
+    return (
+        "表达示例（只学习结构和语气，不得作为事实来源，也不得引用其中编号）：\n"
+        f"{text}\n\n"
+    )
+
+
 def _prompt_for_state(state):
     # 个人策略已下线；最近问题只用于同一组对话的上下文，不能作为事实来源。
     conversation_id = state.get("conversation_id")
@@ -468,6 +488,7 @@ def _prompt_for_state(state):
     return (
         f"问题：{state['question']}\n\n"
         f"最近问题（仅保持上下文，不可作为事实来源）：\n{recent_text or '无'}\n\n"
+        f"{_fewshot_block(state)}"
         f"参考资料（只能引用这些编号）：\n{state['context']}"
     )
 

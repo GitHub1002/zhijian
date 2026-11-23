@@ -58,6 +58,12 @@ export const state = reactive({
   adminContentTaskTotal: 0,
   adminContentTaskState: '',
   adminContentTaskFilters: { status: '', priority: '' },
+  adminCuratedExamples: [],
+  adminCuratedPage: 1,
+  adminCuratedPages: 1,
+  adminCuratedTotal: 0,
+  adminCuratedState: '',
+  adminCuratedFilters: { status: '', library: '' },
   permissionOpen: false,
   permissions: [],
   permissionState: '',
@@ -503,8 +509,47 @@ export async function openAdminFeedback() {
   await Promise.all([
     loadAdminFeedback(1),
     loadAdminAnalytics(),
-    state.adminQualityTab === 'tasks' ? loadAdminContentTasks(1) : Promise.resolve(),
+    state.adminQualityTab === 'tasks'
+      ? loadAdminContentTasks(1)
+      : state.adminQualityTab === 'curated'
+        ? loadAdminCuratedExamples(1)
+        : Promise.resolve(),
   ])
+}
+
+export async function loadAdminCuratedExamples(page = 1) {
+  state.adminCuratedState = '正在加载精选正例…'
+  const params = new URLSearchParams({ page: String(page), page_size: '20' })
+  Object.entries(state.adminCuratedFilters).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  try {
+    const data = await api(`/api/admin/curated-examples?${params.toString()}`)
+    state.adminCuratedExamples = data.items || []
+    state.adminCuratedPage = data.page || 1
+    state.adminCuratedPages = data.pages || 1
+    state.adminCuratedTotal = data.total || 0
+    state.adminCuratedState = ''
+  } catch (error) {
+    state.adminCuratedState = error.message
+  }
+}
+
+export async function updateCuratedExample(exampleId, payload) {
+  try {
+    const data = await api(`/api/admin/curated-examples/${encodeURIComponent(exampleId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+    state.adminCuratedExamples = state.adminCuratedExamples.map(item =>
+      item.id === data.example.id ? data.example : item
+    )
+    notify('精选正例已更新', 'success')
+    return data.example
+  } catch (error) {
+    notify(error.message, 'error')
+    return null
+  }
 }
 
 export async function loadAdminContentTasks(page = 1) {

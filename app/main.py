@@ -7,6 +7,7 @@
 import csv
 import io
 import json
+import logging
 import re
 import sqlite3
 import mimetypes
@@ -22,7 +23,9 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import analytics, config, content, content_store, db, documents, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
+from . import analytics, config, content, content_store, curated_store, db, documents, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
+
+logger = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # 字体与常用前端资源的 MIME 修正，避免被识别为 octet-stream 导致浏览器拒绝加载
@@ -102,6 +105,11 @@ class ContentTaskFromFeedbackRequest(BaseModel):
     library: Optional[str] = Field(default=None, max_length=40)
     kind: Optional[str] = None
     priority: Optional[str] = None
+
+
+class CuratedExampleUpdateRequest(BaseModel):
+    status: Optional[Literal["candidate", "approved", "rejected"]] = None
+    use_as_few_shot: Optional[bool] = None
 
 
 class DocRequest(BaseModel):
@@ -539,6 +547,42 @@ def admin_task_from_feedback(
     return {"ok": True, **result}
 
 
+@app.get("/api/admin/curated-examples")
+def admin_curated_examples(
+    page: int = 1,
+    page_size: int = 20,
+    status: Optional[str] = None,
+    library: Optional[str] = None,
+    _admin=Depends(admin_user),
+):
+    return curated_store.list_examples(
+        page=page, page_size=page_size, status=status, library=library
+    )
+
+
+@app.get("/api/admin/curated-examples/{example_id}")
+def admin_curated_example_detail(example_id: int, _admin=Depends(admin_user)):
+    example = curated_store.get_example(example_id)
+    if not example:
+        raise HTTPException(status_code=404, detail="精选正例不存在")
+    return {"example": example}
+
+
+@app.patch("/api/admin/curated-examples/{example_id}")
+def admin_update_curated_example(
+    example_id: int, req: CuratedExampleUpdateRequest, admin=Depends(admin_user)
+):
+    example = curated_store.update_example(
+        example_id,
+        status=req.status,
+        use_as_few_shot=req.use_as_few_shot,
+        reviewed_by=admin["id"],
+    )
+    if not example:
+        raise HTTPException(status_code=404, detail="精选正例不存在")
+    return {"ok": True, "example": example}
+
+
 def _ask_error_detail(exc):
     # 把上游异常翻译成可行动的中文，避免 SDK 堆栈或 Key 泄露到前端。
     if isinstance(exc, ValueError):
@@ -672,6 +716,11 @@ def feedback(req: FeedbackRequest, user=Depends(current_user)):
     trace = tracing.get_trace_by_answer(req.answer_id)
     category, confidence, note = feedback_rules.classify(normalized, trace)
     db.set_feedback_triage(feedback_id, category, confidence, note)
+    if normalized["sentiment"] == "positive":
+        try:
+            curated_store.ensure_candidate(req.answer_id, feedback_id)
+        except Exception:  # 精选失败不能影响反馈本身
+            logger.exception("ensure curated example failed")
     return {"ok": True, "feedback": db.get_feedback(feedback_id, user["id"])}
 
 
@@ -721,6 +770,13 @@ def update_feedback(feedback_id: int, req: FeedbackUpdateRequest, user=Depends(c
     trace = tracing.get_trace_by_answer(current["answer_id"])
     category, confidence, note = feedback_rules.classify(normalized, trace)
     db.set_feedback_triage(feedback_id, category, confidence, note)
+    try:
+        if normalized["sentiment"] == "positive":
+            curated_store.ensure_candidate(current["answer_id"], feedback_id)
+        else:
+            curated_store.invalidate_candidate(current["answer_id"])
+    except Exception:  # 精选状态同步失败不能影响反馈修改
+        logger.exception("sync curated example failed")
     return {"ok": True, "feedback": updated}
 
 

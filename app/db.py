@@ -222,6 +222,25 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_content_task_feedback_feedback
                 ON content_task_feedback(feedback_id);
+            CREATE TABLE IF NOT EXISTS curated_examples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                answer_id INTEGER UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
+                feedback_id INTEGER REFERENCES feedback(id) ON DELETE SET NULL,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                sources_json TEXT NOT NULL DEFAULT '[]',
+                library TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'candidate',
+                use_as_few_shot INTEGER NOT NULL DEFAULT 0,
+                reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                reviewed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_curated_status
+                ON curated_examples(status, use_as_few_shot, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_curated_library
+                ON curated_examples(library);
             CREATE TABLE IF NOT EXISTS answer_traces (
                 trace_id TEXT PRIMARY KEY,
                 answer_id INTEGER UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
@@ -386,9 +405,9 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback(sentiment, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
-        conn.execute("PRAGMA user_version = 3")
+        conn.execute("PRAGMA user_version = 4")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '3', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '4', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )

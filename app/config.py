@@ -42,6 +42,9 @@ RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 MIN_VECTOR_SCORE = float(os.getenv("MIN_VECTOR_SCORE", "0.35"))
 MIN_RERANK_SCORE = float(os.getenv("MIN_RERANK_SCORE", "0.0"))
 RAG_QUERY_REWRITE_LIMIT = max(0, min(int(os.getenv("RAG_QUERY_REWRITE_LIMIT", "0")), 1))
+# 精选正例默认不进入提示词：需要管理员审核 + 这里显式打开。
+CURATED_FEWSHOT_ENABLED = os.getenv("CURATED_FEWSHOT_ENABLED", "0").lower() in {"1", "true", "yes"}
+CURATED_FEWSHOT_LIMIT = max(1, min(int(os.getenv("CURATED_FEWSHOT_LIMIT", "3")), 10))
 
 # 反馈编辑窗口与轨迹保留期。反馈只做轻量校验，不在这里调用大模型。
 FEEDBACK_EDIT_WINDOW_HOURS = int(os.getenv("FEEDBACK_EDIT_WINDOW_HOURS", "168"))

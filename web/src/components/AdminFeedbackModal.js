@@ -4,6 +4,8 @@ import {
   loadAdminFeedbackDetail,
   loadAdminAnalytics,
   loadAdminContentTasks,
+  loadAdminCuratedExamples,
+  updateCuratedExample,
   createTaskFromFeedback,
   updateContentTask,
   exportAdminFeedback,
@@ -63,6 +65,11 @@ const TASK_PRIORITY_OPTIONS = [
   ['medium', '中'],
   ['low', '低'],
 ]
+const CURATED_STATUS_OPTIONS = [
+  ['candidate', '候选'],
+  ['approved', '已通过'],
+  ['rejected', '已否决'],
+]
 
 export default {
   setup() {
@@ -89,12 +96,25 @@ export default {
     function refreshAll() {
       loadAdminFeedback(1)
       loadAdminAnalytics()
-      loadAdminContentTasks(1)
+      if (state.adminQualityTab === 'tasks') loadAdminContentTasks(1)
+      if (state.adminQualityTab === 'curated') loadAdminCuratedExamples(1)
     }
 
     function switchTab(tab) {
       state.adminQualityTab = tab
       if (tab === 'tasks') loadAdminContentTasks(1)
+      if (tab === 'curated') loadAdminCuratedExamples(1)
+    }
+
+    function loadCurated(page) {
+      loadAdminCuratedExamples(page)
+    }
+
+    function saveCurated(example) {
+      updateCuratedExample(example.id, {
+        status: example.status,
+        use_as_few_shot: example.use_as_few_shot,
+      })
     }
 
     function loadTasks(page) {
@@ -142,6 +162,8 @@ export default {
       switchTab,
       loadTasks,
       saveTask,
+      loadCurated,
+      saveCurated,
       makeTask,
       taskKindLabel,
       taskPriorityLabel,
@@ -151,6 +173,7 @@ export default {
       sentimentOptions: SENTIMENT_OPTIONS,
       taskStatusOptions: TASK_STATUS_OPTIONS,
       taskPriorityOptions: TASK_PRIORITY_OPTIONS,
+      curatedStatusOptions: CURATED_STATUS_OPTIONS,
     }
   },
   template: `
@@ -164,6 +187,7 @@ export default {
           <div class="admin-quality-tabs">
             <button type="button" :class="{ active: state.adminQualityTab === 'feedback' }" @click="switchTab('feedback')">反馈队列</button>
             <button type="button" :class="{ active: state.adminQualityTab === 'tasks' }" @click="switchTab('tasks')">内容任务<span v-if="state.adminContentTaskTotal"> · {{ state.adminContentTaskTotal }}</span></button>
+            <button type="button" :class="{ active: state.adminQualityTab === 'curated' }" @click="switchTab('curated')">精选正例<span v-if="state.adminCuratedTotal"> · {{ state.adminCuratedTotal }}</span></button>
           </div>
           <div v-if="state.adminQualityTab === 'feedback'">
           <p class="admin-copy">点踩会带上原因、来源标记和当次检索轨迹。先看问题是“没检索到”还是“检索到但答错”，再决定修检索、修 prompt 还是补文档。</p>
@@ -289,7 +313,7 @@ export default {
             </div>
           </div>
           </div>
-          <div v-else class="admin-tasks">
+          <div v-else-if="state.adminQualityTab === 'tasks'" class="admin-tasks">
             <div class="admin-feedback-filters">
               <select v-model="state.adminContentTaskFilters.status" @change="loadTasks(1)">
                 <option value="">全部状态</option>
@@ -319,6 +343,41 @@ export default {
               <button type="button" :disabled="state.adminContentTaskPage <= 1" @click="loadTasks(state.adminContentTaskPage - 1)">上一页</button>
               <span>第 {{ state.adminContentTaskPage }} / {{ state.adminContentTaskPages }} 页 · 共 {{ state.adminContentTaskTotal }} 条</span>
               <button type="button" :disabled="state.adminContentTaskPage >= state.adminContentTaskPages" @click="loadTasks(state.adminContentTaskPage + 1)">下一页</button>
+            </div>
+          </div>
+          <div v-else class="admin-curated">
+            <p class="admin-copy">点赞回答会进入候选池。只有状态“已通过”且勾选“用于 few-shot”，同时服务端 CURATED_FEWSHOT_ENABLED=1 时，示例才会进入提示词；示例不作为事实来源。</p>
+            <div class="admin-feedback-filters">
+              <select v-model="state.adminCuratedFilters.status" @change="loadCurated(1)">
+                <option value="">全部状态</option>
+                <option v-for="item in curatedStatusOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option>
+              </select>
+              <button class="toolbar-btn" type="button" @click="loadCurated(1)">刷新</button>
+            </div>
+            <div v-if="state.adminCuratedState" class="admin-users-state">{{ state.adminCuratedState }}</div>
+            <div class="admin-task-list">
+              <div v-if="!state.adminCuratedExamples.length" class="admin-empty">还没有候选。用户点👍后会自动出现。</div>
+              <div v-for="item in state.adminCuratedExamples" :key="item.id" class="admin-task-row admin-curated-row">
+                <div class="admin-task-main">
+                  <strong>{{ item.question }}</strong>
+                  <small>{{ item.library || '未标注库' }} · 反馈 #{{ item.feedback_id }} · {{ item.reviewer_name || '未审核' }}</small>
+                  <pre class="admin-curated-answer">{{ item.answer }}</pre>
+                </div>
+                <div class="admin-curated-actions">
+                  <select v-model="item.status" @change="saveCurated(item)">
+                    <option v-for="option in curatedStatusOptions" :key="option[0]" :value="option[0]">{{ option[1] }}</option>
+                  </select>
+                  <label class="admin-curated-toggle">
+                    <input type="checkbox" v-model="item.use_as_few_shot" @change="saveCurated(item)" />
+                    用于 few-shot
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div class="admin-feedback-pagination">
+              <button type="button" :disabled="state.adminCuratedPage <= 1" @click="loadCurated(state.adminCuratedPage - 1)">上一页</button>
+              <span>第 {{ state.adminCuratedPage }} / {{ state.adminCuratedPages }} 页 · 共 {{ state.adminCuratedTotal }} 条</span>
+              <button type="button" :disabled="state.adminCuratedPage >= state.adminCuratedPages" @click="loadCurated(state.adminCuratedPage + 1)">下一页</button>
             </div>
           </div>
         </div>
