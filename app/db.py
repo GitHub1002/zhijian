@@ -12,6 +12,7 @@ import json
 import re
 import secrets
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -61,9 +62,18 @@ def _connect():
     return conn
 
 
+@contextmanager
 def connect():
-    """供 feedback/trace/eval 等独立存储模块复用的连接工厂。"""
-    return _connect()
+    """供 feedback/trace/eval 等独立存储模块复用：退出时提交并关闭连接。"""
+    conn = _connect()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def now():

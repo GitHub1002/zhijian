@@ -54,7 +54,7 @@ def test_empty_candidates_are_not_grounded():
 
 
 def test_rerank_marks_model_mode(monkeypatch):
-    monkeypatch.setattr(rag, "_get_reranker", lambda: _FakeReranker([3.0, -1.0]))
+    monkeypatch.setattr(rag, "_get_reranker", lambda cfg=None: _FakeReranker([3.0, -1.0]))
     candidates = [{"text": "年假"}, {"text": "年会"}]
     ordered = rag._rerank("年假", candidates)
 
@@ -64,7 +64,7 @@ def test_rerank_marks_model_mode(monkeypatch):
 
 
 def test_rerank_marks_lexical_mode_when_model_unavailable(monkeypatch):
-    monkeypatch.setattr(rag, "_get_reranker", lambda: False)
+    monkeypatch.setattr(rag, "_get_reranker", lambda cfg=None: False)
     candidates = [{"text": "年假", "rrf_score": 0.1}]
     ordered = rag._rerank("年假", candidates)
 

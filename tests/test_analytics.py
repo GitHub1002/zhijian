@@ -65,7 +65,7 @@ def test_libraries_reasons_and_categories(temp_db):
     _seed(temp_db)
 
     assert analytics.libraries(30) == [
-        {"library": "hr", "answers": 1, "selected_chunks": 1, "negative": 1}
+        {"library": "hr", "answers": 1, "selected_chunks": 1, "negative": 1, "clicks": 0}
     ]
     assert analytics.reasons(30) == [{"reason": "wrong_info", "count": 1}]
     assert analytics.categories(30) == [{"category": "unknown", "count": 1}]

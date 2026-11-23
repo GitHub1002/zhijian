@@ -27,7 +27,7 @@ def test_graph_rewrites_once_then_answers_from_grounded_evidence(monkeypatch):
     monkeypatch.setattr(rag.config, "RAG_QUERY_REWRITE_LIMIT", 1)
     monkeypatch.setattr(rag.db, "approved_permissions", lambda _user_id: ["ops"])
 
-    def hybrid_search(query, _libraries):
+    def hybrid_search(query, _libraries, cfg=None):
         searches.append(query)
         if len(searches) == 1:
             return []
@@ -62,7 +62,7 @@ def test_graph_refuses_after_one_unsuccessful_rewrite(monkeypatch):
     monkeypatch.setattr(rag.config, "RAG_QUERY_REWRITE_LIMIT", 1)
     monkeypatch.setattr(rag.db, "approved_permissions", lambda _user_id: ["ops"])
     monkeypatch.setattr(rag.db, "create_answer", lambda *_: 88)
-    monkeypatch.setattr(rag, "_hybrid_search", lambda query, _libraries: searches.append(query) or [])
+    monkeypatch.setattr(rag, "_hybrid_search", lambda query, _libraries, cfg=None: searches.append(query) or [])
     monkeypatch.setattr(rag.llm, "generate", lambda *_: "员工差旅报销政策")
 
     result = rag._build_rag_graph().invoke({"question": "出差的费用怎么报？", "user_id": 4})["result"]
@@ -78,7 +78,7 @@ def test_query_rewrite_is_disabled_by_default_to_preserve_existing_runtime(monke
     monkeypatch.setattr(rag.config, "RAG_QUERY_REWRITE_LIMIT", 0)
     monkeypatch.setattr(rag.db, "approved_permissions", lambda _user_id: ["ops"])
     monkeypatch.setattr(rag.db, "create_answer", lambda *_: 99)
-    monkeypatch.setattr(rag, "_hybrid_search", lambda query, _libraries: searches.append(query) or [])
+    monkeypatch.setattr(rag, "_hybrid_search", lambda query, _libraries, cfg=None: searches.append(query) or [])
     monkeypatch.setattr(
         rag.llm, "generate",
         lambda *_: (_ for _ in ()).throw(AssertionError("rewrite must remain disabled")),
