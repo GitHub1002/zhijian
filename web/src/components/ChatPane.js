@@ -1,5 +1,5 @@
 import { nextTick, watch } from 'vue'
-import { state, ask, openDoc, sendFeedback, updateFeedback, loadFeedbackForAnswer, notify } from '../store.js'
+import { state, ask, openDoc, recordSourceClick, sendFeedback, updateFeedback, loadFeedbackForAnswer, notify } from '../store.js'
 import { sourceLabel } from '../editor.js'
 
 export default {
@@ -16,6 +16,11 @@ export default {
       input.style.height = 'auto'
       const max = parseFloat(getComputedStyle(input).maxHeight) || 144
       input.style.height = `${Math.min(Math.max(input.scrollHeight, 48), max)}px`
+    }
+
+    function openSource(message, source) {
+      recordSourceClick(message, source)
+      openDoc(source.source, source.anchor || '')
     }
 
     function onKey(event) {
@@ -175,7 +180,7 @@ export default {
     }
 
     return {
-      state, ask, openDoc, sourceLabel, resize, onKey, useSuggestion,
+      state, ask, openDoc, openSource, sourceLabel, resize, onKey, useSuggestion,
       reasonOptions, sourceMarkOptions, reasonLabel, hasReason, toggleReason,
       hasSourceMark, toggleSourceMark, chooseSentiment, submitFeedback,
       editFeedback, cancelFeedback, quotaLabel,
@@ -213,7 +218,7 @@ export default {
               <div v-else-if="message.html" class="markdown" v-html="message.html"></div>
               <div v-else class="markdown">{{ message.text }}</div>
               <div v-if="message.sources && message.sources.length" class="sources">参考来源：
-                <button v-for="source in message.sources" :key="sourceLabel(source)" type="button" class="source-chip" @click="openDoc(source.source, source.anchor || '')">{{ sourceLabel(source) }}</button>
+                <button v-for="source in message.sources" :key="sourceLabel(source)" type="button" class="source-chip" @click="openSource(message, source)">{{ sourceLabel(source) }}</button>
               </div>
               <div v-if="message.answerId" class="feedback">
                 <template v-if="message.feedback && message.feedback.id && !message._editing">

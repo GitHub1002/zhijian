@@ -77,6 +77,15 @@ class FeedbackTriageRequest(BaseModel):
     note: str = Field(default="", max_length=2000)
 
 
+class SourceClickRequest(BaseModel):
+    answer_id: int
+    source: str = Field(default="", max_length=300)
+    heading: str = Field(default="", max_length=300)
+    anchor: str = Field(default="", max_length=300)
+    library: str = Field(default="", max_length=40)
+    source_index: int = Field(default=0, ge=0, le=50)
+
+
 class ContentTaskRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=4000)
@@ -765,6 +774,23 @@ def api_ask(req: AskRequest, user=Depends(current_user)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/source-click")
+def source_click(req: SourceClickRequest, user=Depends(current_user)):
+    answer = db.answer_for_user(req.answer_id, user["id"])
+    if not answer:
+        raise HTTPException(status_code=404, detail="找不到这条回答")
+    db.record_source_click(
+        req.answer_id,
+        user["id"],
+        req.source,
+        heading=req.heading,
+        anchor=req.anchor,
+        library=req.library,
+        source_index=req.source_index,
+    )
+    return {"ok": True}
 
 
 @app.post("/api/feedback")

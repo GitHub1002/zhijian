@@ -273,6 +273,22 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant
                 ON experiment_assignments(experiment_key, variant_key);
+            CREATE TABLE IF NOT EXISTS source_clicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                answer_id INTEGER NOT NULL REFERENCES answers(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                source TEXT NOT NULL DEFAULT '',
+                heading TEXT NOT NULL DEFAULT '',
+                anchor TEXT NOT NULL DEFAULT '',
+                library TEXT NOT NULL DEFAULT '',
+                source_index INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(answer_id, user_id, source, heading)
+            );
+            CREATE INDEX IF NOT EXISTS idx_source_clicks_created
+                ON source_clicks(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_source_clicks_library
+                ON source_clicks(library, created_at DESC);
             CREATE TABLE IF NOT EXISTS answer_traces (
                 trace_id TEXT PRIMARY KEY,
                 answer_id INTEGER UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
@@ -437,9 +453,9 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback(sentiment, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
-        conn.execute("PRAGMA user_version = 5")
+        conn.execute("PRAGMA user_version = 6")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '5', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '6', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )
@@ -1061,6 +1077,29 @@ def triage_feedback(feedback_id, actor_id, status, category, note=""):
         updated = conn.execute("SELECT * FROM feedback WHERE id = ?", (feedback_id,)).fetchone()
         return _feedback_dict(conn, updated)
 
+
+
+def record_source_click(answer_id, user_id, source, heading="", anchor="",
+                        library="", source_index=0):
+    """同一用户对同一来源只计一次点击，避免刷新或连点刷高引用点击率。"""
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO source_clicks(
+                answer_id, user_id, source, heading, anchor, library,
+                source_index, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                answer_id,
+                user_id,
+                source or "",
+                heading or "",
+                anchor or "",
+                library or "",
+                int(source_index or 0),
+                _now(),
+            ),
+        )
+        return cur.rowcount > 0
 
 
 def recent_answers(user_id, limit=5, conversation_id=None):

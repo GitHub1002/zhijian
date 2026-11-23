@@ -57,6 +57,18 @@ def overview(days=DEFAULT_DAYS):
                FROM feedback WHERE created_at >= ?""",
             (since,),
         ).fetchone()
+        answers_with_sources = _int(
+            conn.execute(
+                """SELECT COUNT(*) AS n FROM answers
+                   WHERE created_at >= ? AND sources_json NOT IN ('[]', '')""",
+                (since,),
+            ).fetchone()["n"]
+        )
+        clicks = conn.execute(
+            """SELECT COUNT(*) AS clicks, COUNT(DISTINCT answer_id) AS clicked
+               FROM source_clicks WHERE created_at >= ?""",
+            (since,),
+        ).fetchone()
 
     trace_total = _int(traces["total"])
     feedback_total = _int(feedback["total"])
@@ -75,6 +87,12 @@ def overview(days=DEFAULT_DAYS):
         "negative_rate": _rate(_int(feedback["negative"]), feedback_total),
         # 窗口内的反馈可能指向窗口外的回答，按 100% 封顶。
         "feedback_coverage": min(1.0, _rate(_int(feedback["covered"]), answers)),
+        "answers_with_sources": answers_with_sources,
+        "citation_clicks": _int(clicks["clicks"]),
+        "citation_clicked_answers": _int(clicks["clicked"]),
+        "citation_click_rate": min(
+            1.0, _rate(_int(clicks["clicked"]), answers_with_sources)
+        ),
     }
 
 
@@ -154,14 +172,23 @@ def libraries(days=DEFAULT_DAYS):
                GROUP BY c.library""",
             (since,),
         ).fetchall()
+        clicks = conn.execute(
+            """SELECT library, COUNT(DISTINCT answer_id) AS clicks
+               FROM source_clicks
+               WHERE created_at >= ? AND library <> ''
+               GROUP BY library""",
+            (since,),
+        ).fetchall()
 
     negative_map = {row["library"]: _int(row["negative"]) for row in negatives}
+    click_map = {row["library"]: _int(row["clicks"]) for row in clicks}
     return [
         {
             "library": row["library"],
             "answers": _int(row["answers"]),
             "selected_chunks": _int(row["selected_chunks"]),
             "negative": negative_map.get(row["library"], 0),
+            "clicks": click_map.get(row["library"], 0),
         }
         for row in rows
     ]

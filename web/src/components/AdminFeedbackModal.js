@@ -300,17 +300,19 @@ export default {
               <div class="admin-stat"><span>拒答率</span><strong>{{ percent(state.adminAnalyticsOverview.refusal_rate) }}</strong></div>
               <div class="admin-stat"><span>反馈覆盖</span><strong>{{ percent(state.adminAnalyticsOverview.feedback_coverage) }}</strong></div>
               <div class="admin-stat"><span>点踩率</span><strong>{{ percent(state.adminAnalyticsOverview.negative_rate) }}</strong></div>
+              <div class="admin-stat"><span>引用点击率</span><strong>{{ percent(state.adminAnalyticsOverview.citation_click_rate) }}</strong></div>
             </div>
             <div class="admin-analytics-grid">
               <div>
                 <div class="admin-section-title">按知识库</div>
                 <table class="admin-analytics-table">
-                  <thead><tr><th>库</th><th>回答</th><th>点踩</th></tr></thead>
+                  <thead><tr><th>库</th><th>回答</th><th>点踩</th><th>点击</th></tr></thead>
                   <tbody>
                     <tr v-for="item in state.adminAnalyticsLibraries" :key="item.library">
                       <td>{{ item.library }}</td>
                       <td>{{ item.answers }}</td>
                       <td>{{ item.negative }}</td>
+                      <td>{{ item.clicks }}</td>
                     </tr>
                   </tbody>
                 </table>

@@ -481,6 +481,32 @@ function applyAnswer(bubble, data) {
   }
 }
 
+export function recordSourceClick(message, source) {
+  if (!message || !message.answerId) return
+  const payload = JSON.stringify({
+    answer_id: message.answerId,
+    source: source.source || '',
+    heading: source.heading || '',
+    anchor: source.anchor || '',
+    library: source.library || '',
+    source_index: source.index || 0,
+  })
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon(
+      '/api/source-click',
+      new Blob([payload], { type: 'application/json' })
+    )
+    return
+  }
+  fetch('/api/source-click', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+    keepalive: true,
+  }).catch(() => {})
+}
+
 export async function sendFeedback(message, payload) {
   const data = await api('/api/feedback', {
     method: 'POST',
