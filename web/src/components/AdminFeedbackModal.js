@@ -328,6 +328,14 @@ export default {
                 <div class="admin-reason-list">
                   <span v-for="item in state.adminAnalyticsCategories" :key="item.category" class="reason-chip">{{ categoryLabel(item.category) }} · {{ item.count }}</span>
                 </div>
+                <div class="admin-section-title">问题聚类</div>
+                <div class="admin-cluster-list">
+                  <div v-for="item in state.adminAnalyticsClusters" :key="item.label" class="admin-cluster-row">
+                    <strong>{{ item.label }}</strong>
+                    <small>{{ item.size }} 条 · {{ (item.reasons || []).map(reason => reasonLabel(reason.reason)).join('、') || '未分类' }}</small>
+                  </div>
+                  <div v-if="!state.adminAnalyticsClusters.length" class="admin-empty">近 30 天没有可聚类的点踩问题。</div>
+                </div>
               </div>
             </div>
           </div>

@@ -50,6 +50,7 @@ export const state = reactive({
   adminAnalyticsLibraries: [],
   adminAnalyticsReasons: [],
   adminAnalyticsCategories: [],
+  adminAnalyticsClusters: [],
   adminAnalyticsState: '',
   adminQualityTab: 'feedback',
   adminContentTasks: [],
@@ -697,16 +698,18 @@ export async function updateContentTask(taskId, payload) {
 export async function loadAdminAnalytics() {
   state.adminAnalyticsState = '正在加载看板…'
   try {
-    const [overview, libraries, reasons, categories] = await Promise.all([
+    const [overview, libraries, reasons, categories, clusters] = await Promise.all([
       api('/api/admin/analytics/overview'),
       api('/api/admin/analytics/libraries'),
       api('/api/admin/analytics/reasons'),
       api('/api/admin/analytics/categories'),
+      api('/api/admin/analytics/clusters'),
     ])
     state.adminAnalyticsOverview = overview || null
     state.adminAnalyticsLibraries = libraries.items || []
     state.adminAnalyticsReasons = reasons.items || []
     state.adminAnalyticsCategories = categories.items || []
+    state.adminAnalyticsClusters = clusters.items || []
     state.adminAnalyticsState = ''
   } catch (error) {
     state.adminAnalyticsState = error.message

@@ -4,6 +4,7 @@
 避免在万级 answers 上把整表读进内存。
 """
 import json
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +12,7 @@ from . import db
 
 DEFAULT_DAYS = 30
 MAX_DAYS = 365
+CLUSTER_THRESHOLD = 0.3
 
 
 def _days(value):
@@ -224,3 +226,86 @@ def categories(days=DEFAULT_DAYS):
             (since,),
         ).fetchall()
     return [{"category": row["category"], "count": _int(row["count"])} for row in rows]
+
+
+def _tokens(text):
+    value = (text or "").lower()
+    cjk = "".join(re.findall(r"[一-鿿]", value))
+    bigrams = {cjk[index:index + 2] for index in range(max(0, len(cjk) - 1))}
+    words = set(re.findall(r"[a-z0-9_]+", value))
+    return bigrams | words
+
+
+def _jaccard(left, right):
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _cluster_rows(rows, threshold=CLUSTER_THRESHOLD):
+    clusters = []
+    for row in rows:
+        tokens = _tokens(row.get("question", ""))
+        if not tokens:
+            continue
+        best = None
+        best_score = 0.0
+        for cluster in clusters:
+            score = _jaccard(tokens, cluster["tokens"])
+            if score > best_score:
+                best = cluster
+                best_score = score
+        if best is not None and best_score >= threshold:
+            best["tokens"] |= tokens
+            best["questions"].append(row.get("question", ""))
+            best["reasons"].update(row.get("reasons") or [])
+            best["ids"].append(row.get("id"))
+        else:
+            clusters.append(
+                {
+                    "tokens": set(tokens),
+                    "questions": [row.get("question", "")],
+                    "reasons": Counter(row.get("reasons") or []),
+                    "ids": [row.get("id")],
+                }
+            )
+    return clusters
+
+
+def clusters(days=DEFAULT_DAYS, limit=20):
+    since = _since(days)
+    with db.connect() as conn:
+        rows = conn.execute(
+            """SELECT f.id, a.question, f.reasons_json
+               FROM feedback f
+               LEFT JOIN answers a ON a.id = f.answer_id
+               WHERE f.sentiment = 'negative' AND f.created_at >= ?""",
+            (since,),
+        ).fetchall()
+    parsed = []
+    for row in rows:
+        try:
+            reasons = json.loads(row["reasons_json"] or "[]")
+        except (TypeError, ValueError):
+            reasons = []
+        parsed.append(
+            {"id": row["id"], "question": row["question"] or "", "reasons": reasons}
+        )
+
+    items = []
+    for cluster in _cluster_rows(parsed):
+        questions = cluster["questions"]
+        label = Counter(questions).most_common(1)[0][0] if questions else "未命名问题"
+        items.append(
+            {
+                "label": label[:60],
+                "size": len(cluster["ids"]),
+                "questions": questions[:5],
+                "reasons": [
+                    {"reason": reason, "count": count}
+                    for reason, count in cluster["reasons"].most_common(5)
+                ],
+            }
+        )
+    items.sort(key=lambda item: item["size"], reverse=True)
+    return items[:max(1, min(100, int(limit or 20)))]

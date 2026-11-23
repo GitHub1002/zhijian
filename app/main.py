@@ -504,6 +504,15 @@ def admin_analytics_categories(days: int = analytics.DEFAULT_DAYS, _admin=Depend
     return {"items": analytics.categories(days)}
 
 
+@app.get("/api/admin/analytics/clusters")
+def admin_analytics_clusters(
+    days: int = analytics.DEFAULT_DAYS,
+    limit: int = 20,
+    _admin=Depends(admin_user),
+):
+    return {"items": analytics.clusters(days, limit)}
+
+
 @app.get("/api/admin/content-tasks")
 def admin_content_tasks(
     page: int = 1,
