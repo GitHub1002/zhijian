@@ -769,6 +769,25 @@ body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
   display: flex; gap: 6px; align-items: center;
   font-size: 12px; color: var(--ink-3); white-space: nowrap;
 }
+.admin-experiment-form {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+  padding: 12px; border: 1px solid var(--line); border-radius: var(--r-s);
+  background: var(--bg-sub);
+}
+.admin-experiment-form input {
+  border: 1px solid var(--line-2); border-radius: var(--r-s);
+  background: var(--bg); padding: 8px 10px; font-size: 13px; outline: none;
+}
+.admin-experiment-form textarea {
+  flex: 1 0 100%; min-height: 64px; resize: vertical;
+  border: 1px solid var(--line-2); border-radius: var(--r-s);
+  background: var(--bg); padding: 8px 10px; font-size: 13px; outline: none;
+}
+.admin-experiment-form input:focus, .admin-experiment-form textarea:focus {
+  border-color: var(--ink);
+}
+.admin-experiment-row { align-items: flex-start; }
+.admin-experiment-results { margin-top: 18px; }
 .permission-status.new { color: var(--ink-3); background: var(--bg-sub); }
 .permission-status.triaged { color: var(--ink-2); background: var(--bg-sub); }
 .permission-status.in_progress { color: var(--ink); background: var(--bg-sub); }

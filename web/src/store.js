@@ -64,6 +64,10 @@ export const state = reactive({
   adminCuratedTotal: 0,
   adminCuratedState: '',
   adminCuratedFilters: { status: '', library: '' },
+  adminExperiments: [],
+  adminExperimentState: '',
+  adminExperimentResults: null,
+  adminExperimentResultsState: '',
   permissionOpen: false,
   permissions: [],
   permissionState: '',
@@ -513,8 +517,67 @@ export async function openAdminFeedback() {
       ? loadAdminContentTasks(1)
       : state.adminQualityTab === 'curated'
         ? loadAdminCuratedExamples(1)
-        : Promise.resolve(),
+        : state.adminQualityTab === 'experiments'
+          ? loadAdminExperiments()
+          : Promise.resolve(),
   ])
+}
+
+export async function loadAdminExperiments() {
+  state.adminExperimentState = '正在加载实验…'
+  try {
+    const data = await api('/api/admin/experiments')
+    state.adminExperiments = data.items || []
+    state.adminExperimentState = ''
+  } catch (error) {
+    state.adminExperimentState = error.message
+  }
+}
+
+export async function createExperiment(payload) {
+  try {
+    const data = await api('/api/admin/experiments', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+    notify('实验已创建', 'success')
+    await loadAdminExperiments()
+    return data.experiment
+  } catch (error) {
+    notify(error.message, 'error')
+    return null
+  }
+}
+
+export async function updateExperiment(key, payload) {
+  try {
+    const data = await api(`/api/admin/experiments/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+    state.adminExperiments = state.adminExperiments.map(item =>
+      item.key === data.experiment.key ? data.experiment : item
+    )
+    notify('实验已更新', 'success')
+    return data.experiment
+  } catch (error) {
+    notify(error.message, 'error')
+    return null
+  }
+}
+
+export async function loadExperimentResults(key) {
+  state.adminExperimentResults = null
+  state.adminExperimentResultsState = '正在加载实验结果…'
+  try {
+    const data = await api(
+      `/api/admin/experiments/${encodeURIComponent(key)}/results`
+    )
+    state.adminExperimentResults = data
+    state.adminExperimentResultsState = ''
+  } catch (error) {
+    state.adminExperimentResultsState = error.message
+  }
 }
 
 export async function loadAdminCuratedExamples(page = 1) {

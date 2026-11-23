@@ -1,10 +1,16 @@
+import { reactive } from 'vue'
 import {
   state,
+  notify,
   loadAdminFeedback,
   loadAdminFeedbackDetail,
   loadAdminAnalytics,
   loadAdminContentTasks,
   loadAdminCuratedExamples,
+  loadAdminExperiments,
+  loadExperimentResults,
+  createExperiment,
+  updateExperiment,
   updateCuratedExample,
   createTaskFromFeedback,
   updateContentTask,
@@ -70,9 +76,25 @@ const CURATED_STATUS_OPTIONS = [
   ['approved', '已通过'],
   ['rejected', '已否决'],
 ]
+const EXPERIMENT_STATUS_OPTIONS = [
+  ['draft', '草稿'],
+  ['running', '运行中'],
+  ['paused', '已暂停'],
+  ['ended', '已结束'],
+]
 
 export default {
   setup() {
+    const experimentForm = reactive({
+      open: false,
+      key: '',
+      name: '',
+      controlKey: 'control',
+      treatmentKey: 'treatment',
+      traffic: 50,
+      config: '{"MIN_RERANK_SCORE": 0.5}',
+    })
+
     function applyFilters() {
       loadAdminFeedback(1)
     }
@@ -98,12 +120,14 @@ export default {
       loadAdminAnalytics()
       if (state.adminQualityTab === 'tasks') loadAdminContentTasks(1)
       if (state.adminQualityTab === 'curated') loadAdminCuratedExamples(1)
+      if (state.adminQualityTab === 'experiments') loadAdminExperiments()
     }
 
     function switchTab(tab) {
       state.adminQualityTab = tab
       if (tab === 'tasks') loadAdminContentTasks(1)
       if (tab === 'curated') loadAdminCuratedExamples(1)
+      if (tab === 'experiments') loadAdminExperiments()
     }
 
     function loadCurated(page) {
@@ -115,6 +139,73 @@ export default {
         status: example.status,
         use_as_few_shot: example.use_as_few_shot,
       })
+    }
+
+    function toggleExperimentForm() {
+      experimentForm.open = !experimentForm.open
+    }
+
+    async function createExperimentFromForm() {
+      let config = {}
+      try {
+        config = JSON.parse(experimentForm.config || '{}')
+      } catch (error) {
+        notify('实验配置不是合法 JSON', 'error')
+        return
+      }
+      const key = experimentForm.key.trim()
+      if (!key) {
+        notify('请填写实验 key', 'warn')
+        return
+      }
+      const traffic = Math.max(1, Math.min(99, Number(experimentForm.traffic) || 50))
+      const created = await createExperiment({
+        key,
+        name: experimentForm.name.trim() || key,
+        variants: [
+          {
+            variant_key: experimentForm.controlKey.trim() || 'control',
+            name: '对照',
+            config: {},
+            traffic_pct: 100 - traffic,
+            is_control: true,
+          },
+          {
+            variant_key: experimentForm.treatmentKey.trim() || 'treatment',
+            name: '实验',
+            config,
+            traffic_pct: traffic,
+            is_control: false,
+          },
+        ],
+      })
+      if (created) {
+        experimentForm.open = false
+        experimentForm.key = ''
+        experimentForm.name = ''
+      }
+    }
+
+    function saveExperiment(experiment) {
+      updateExperiment(experiment.key, { status: experiment.status })
+    }
+
+    function showExperimentResults(key) {
+      loadExperimentResults(key)
+    }
+
+    function loadExperiments() {
+      loadAdminExperiments()
+    }
+
+    function rate(value) {
+      return value === null || value === undefined ? '—' : percent(value)
+    }
+
+    function variantSummary(experiment) {
+      return (experiment.variants || [])
+        .map(item => `${item.variant_key}:${item.traffic_pct}%`)
+        .join(' / ')
     }
 
     function loadTasks(page) {
@@ -164,6 +255,14 @@ export default {
       saveTask,
       loadCurated,
       saveCurated,
+      experimentForm,
+      toggleExperimentForm,
+      createExperimentFromForm,
+      saveExperiment,
+      showExperimentResults,
+      loadExperiments,
+      rate,
+      variantSummary,
       makeTask,
       taskKindLabel,
       taskPriorityLabel,
@@ -174,6 +273,7 @@ export default {
       taskStatusOptions: TASK_STATUS_OPTIONS,
       taskPriorityOptions: TASK_PRIORITY_OPTIONS,
       curatedStatusOptions: CURATED_STATUS_OPTIONS,
+      experimentStatusOptions: EXPERIMENT_STATUS_OPTIONS,
     }
   },
   template: `
@@ -188,6 +288,7 @@ export default {
             <button type="button" :class="{ active: state.adminQualityTab === 'feedback' }" @click="switchTab('feedback')">反馈队列</button>
             <button type="button" :class="{ active: state.adminQualityTab === 'tasks' }" @click="switchTab('tasks')">内容任务<span v-if="state.adminContentTaskTotal"> · {{ state.adminContentTaskTotal }}</span></button>
             <button type="button" :class="{ active: state.adminQualityTab === 'curated' }" @click="switchTab('curated')">精选正例<span v-if="state.adminCuratedTotal"> · {{ state.adminCuratedTotal }}</span></button>
+            <button type="button" :class="{ active: state.adminQualityTab === 'experiments' }" @click="switchTab('experiments')">实验<span v-if="state.adminExperiments.length"> · {{ state.adminExperiments.length }}</span></button>
           </div>
           <div v-if="state.adminQualityTab === 'feedback'">
           <p class="admin-copy">点踩会带上原因、来源标记和当次检索轨迹。先看问题是“没检索到”还是“检索到但答错”，再决定修检索、修 prompt 还是补文档。</p>
@@ -345,7 +446,7 @@ export default {
               <button type="button" :disabled="state.adminContentTaskPage >= state.adminContentTaskPages" @click="loadTasks(state.adminContentTaskPage + 1)">下一页</button>
             </div>
           </div>
-          <div v-else class="admin-curated">
+          <div v-else-if="state.adminQualityTab === 'curated'" class="admin-curated">
             <p class="admin-copy">点赞回答会进入候选池。只有状态“已通过”且勾选“用于 few-shot”，同时服务端 CURATED_FEWSHOT_ENABLED=1 时，示例才会进入提示词；示例不作为事实来源。</p>
             <div class="admin-feedback-filters">
               <select v-model="state.adminCuratedFilters.status" @change="loadCurated(1)">
@@ -378,6 +479,58 @@ export default {
               <button type="button" :disabled="state.adminCuratedPage <= 1" @click="loadCurated(state.adminCuratedPage - 1)">上一页</button>
               <span>第 {{ state.adminCuratedPage }} / {{ state.adminCuratedPages }} 页 · 共 {{ state.adminCuratedTotal }} 条</span>
               <button type="button" :disabled="state.adminCuratedPage >= state.adminCuratedPages" @click="loadCurated(state.adminCuratedPage + 1)">下一页</button>
+            </div>
+          </div>
+          <div v-else class="admin-experiments">
+            <p class="admin-copy">实验默认关闭。服务端 EXPERIMENTS_ENABLED=1 时才会按用户分桶；这里只能覆盖检索参数，可随时暂停或因护栏暂停。</p>
+            <div class="admin-feedback-filters">
+              <button class="toolbar-btn" type="button" @click="toggleExperimentForm">新建实验</button>
+              <button class="toolbar-btn" type="button" @click="loadExperiments">刷新</button>
+            </div>
+            <div v-if="experimentForm.open" class="admin-experiment-form">
+              <input v-model="experimentForm.key" placeholder="key（小写字母/数字/-）" />
+              <input v-model="experimentForm.name" placeholder="实验名称" />
+              <input v-model="experimentForm.controlKey" placeholder="对照变体 key" />
+              <input v-model="experimentForm.treatmentKey" placeholder="实验变体 key" />
+              <input v-model.number="experimentForm.traffic" type="number" min="1" max="99" placeholder="实验流量 %" />
+              <textarea v-model="experimentForm.config" placeholder='实验组检索参数 JSON，例如 {"MIN_RERANK_SCORE": 0.5}'></textarea>
+              <button class="primary-btn" type="button" @click="createExperimentFromForm">创建</button>
+            </div>
+            <div v-if="state.adminExperimentState" class="admin-users-state">{{ state.adminExperimentState }}</div>
+            <div class="admin-task-list">
+              <div v-if="!state.adminExperiments.length" class="admin-empty">还没有实验。</div>
+              <div v-for="experiment in state.adminExperiments" :key="experiment.key" class="admin-task-row admin-experiment-row">
+                <div class="admin-task-main">
+                  <strong>{{ experiment.key }} · {{ experiment.name }}</strong>
+                  <small>{{ variantSummary(experiment) }} · {{ experiment.status }}</small>
+                </div>
+                <div class="admin-curated-actions">
+                  <select v-model="experiment.status" @change="saveExperiment(experiment)">
+                    <option v-for="item in experimentStatusOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option>
+                  </select>
+                  <button class="toolbar-btn" type="button" @click="showExperimentResults(experiment.key)">看结果</button>
+                </div>
+              </div>
+            </div>
+            <div v-if="state.adminExperimentResultsState" class="admin-users-state">{{ state.adminExperimentResultsState }}</div>
+            <div v-else-if="state.adminExperimentResults" class="admin-experiment-results">
+              <div class="admin-section-title">实验结果 · {{ state.adminExperimentResults.experiment.key }}</div>
+              <table class="admin-analytics-table">
+                <thead>
+                  <tr><th>变体</th><th>用户</th><th>回答</th><th>拒答率</th><th>点踩率</th><th>p95 ms</th><th>护栏</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in state.adminExperimentResults.variants" :key="item.variant_key">
+                    <td>{{ item.variant_key }}{{ item.is_control ? '（对照）' : '' }}</td>
+                    <td>{{ item.assignments }}</td>
+                    <td>{{ item.answers }}</td>
+                    <td>{{ rate(item.refusal_rate) }}</td>
+                    <td>{{ rate(item.negative_rate) }}</td>
+                    <td>{{ item.p95_latency_ms ?? '—' }}</td>
+                    <td>{{ item.guardrail_breached ? item.guardrail_flags.join('；') : '正常' }}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
