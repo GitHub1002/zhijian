@@ -7,7 +7,7 @@ import json
 import re
 import time
 
-from . import config, curated_store, db, embedder, llm, md_render, store, tracing
+from . import config, curated_store, db, embedder, experiments, llm, md_render, store, tracing
 
 # 提示词是行为约束的一部分：只允许引用给定编号，证据不足必须拒答。
 # 修改时要同步 README 里的“反幻觉”说明。
@@ -21,10 +21,17 @@ SYSTEM_PROMPT = (
 _RERANKER = None
 
 
-def _get_reranker():
+def _param(cfg, key):
+    """优先读本次请求的实验覆盖值，否则回落到全局配置。"""
+    if cfg and key in cfg:
+        return cfg[key]
+    return getattr(config, key)
+
+
+def _get_reranker(cfg=None):
     # 重排模型较大，首次使用时懒加载；加载失败记为 False，后续请求直接走词面兜底。
     global _RERANKER
-    if _RERANKER is not None or not config.RERANK_ENABLED:
+    if _RERANKER is not None or not _param(cfg, "RERANK_ENABLED"):
         return _RERANKER
     try:
         from fastembed.rerank.cross_encoder import TextCrossEncoder
@@ -49,10 +56,10 @@ def _lexical_score(question, text):
     return len(question_terms & text_terms) / len(question_terms)
 
 
-def _rerank(question, candidates):
+def _rerank(question, candidates, cfg=None):
     if not candidates:
         return []
-    reranker = _get_reranker()
+    reranker = _get_reranker(cfg)
     mode = "lexical"
     if reranker:
         try:
@@ -74,15 +81,18 @@ def _rerank(question, candidates):
     return ordered
 
 
-def _hybrid_search(question, libraries):
+def _hybrid_search(question, libraries, cfg=None):
     # 两路各自取前若干名，再按名次加分。RRF_K 越大，第一名和后面几名的差距越小。
+    hybrid_top_k = int(_param(cfg, "HYBRID_TOP_K"))
+    rrf_k = int(_param(cfg, "RRF_K"))
+    rerank_top_k = int(_param(cfg, "RERANK_TOP_K"))
     try:
         qvec = embedder.embed_query(question)
-        vector_hits = store.search(qvec, config.HYBRID_TOP_K, libraries)
+        vector_hits = store.search(qvec, hybrid_top_k, libraries)
     except Exception:
         # 向量模型首次下载失败时仍保留 BM25 可用，避免整个知识库无法问答。
         vector_hits = []
-    bm25_hits = db.search_bm25(question, libraries, config.HYBRID_TOP_K)
+    bm25_hits = db.search_bm25(question, libraries, hybrid_top_k)
     candidates = {}
     for rank, point in enumerate(vector_hits, start=1):
         payload = dict(point.payload or {})
@@ -94,7 +104,7 @@ def _hybrid_search(question, libraries):
         })
         candidates[chunk_id]["vector_score"] = float(point.score)
         candidates[chunk_id]["vector_rank"] = rank
-        candidates[chunk_id]["rrf_score"] += 1 / (config.RRF_K + rank)
+        candidates[chunk_id]["rrf_score"] += 1 / (rrf_k + rank)
     for rank, row in enumerate(bm25_hits, start=1):
         item = candidates.setdefault(row["chunk_id"], {
             "chunk_id": row["chunk_id"], "source": row["source"], "title": row["title"],
@@ -103,11 +113,11 @@ def _hybrid_search(question, libraries):
         })
         item["bm25_score"] = float(row["bm25_score"])
         item["bm25_rank"] = rank
-        item["rrf_score"] += 1 / (config.RRF_K + rank)
+        item["rrf_score"] += 1 / (rrf_k + rank)
     ranked = sorted(candidates.values(), key=lambda item: item["rrf_score"], reverse=True)
     for rank, item in enumerate(ranked, start=1):
         item["rrf_rank"] = rank
-    return _rerank(question, ranked[: max(config.HYBRID_TOP_K, config.RERANK_TOP_K * 3)])
+    return _rerank(question, ranked[: max(hybrid_top_k, rerank_top_k * 3)], cfg)
 
 
 def _source_label(item):
@@ -176,6 +186,8 @@ def _record_trace(state, answer_id, grounded, refusal_reason="", timings=None):
         ranked=state.get("ranked", []),
         top=state.get("top", []),
         timings=timings if timings is not None else state.get("timings", {}),
+        experiment=state.get("experiment"),
+        config_overrides=state.get("retrieval_config"),
     )
 
 
@@ -188,13 +200,15 @@ def _model_rerank_score(top):
     return max(scores) if scores else None
 
 
-def _has_grounded_evidence(question, top):
+def _has_grounded_evidence(question, top, cfg=None):
     # 模型重排可用时，最高重排 logits 比向量相似度更能区分“有依据”和“只是字面接近”：
     # golden set 上 > 0 能保留全部可回答样本，同时挡住不可回答样本。
     # 重排被关闭或加载失败时，退回下面的向量/BM25 门槛。
+    min_rerank = float(_param(cfg, "MIN_RERANK_SCORE"))
+    min_vector = float(_param(cfg, "MIN_VECTOR_SCORE"))
     rerank_score = _model_rerank_score(top)
     if rerank_score is not None:
-        return rerank_score > config.MIN_RERANK_SCORE
+        return rerank_score > min_rerank
 
     # SQLite 的 bm25() 越小越相关。词面重合用来挡住只撞上一个常见二字的假命中。
     # 具体门槛：
@@ -202,7 +216,7 @@ def _has_grounded_evidence(question, top):
     # - BM25 侧：bm25() < -0.05 且查询词覆盖率 >= 0.18，两个条件必须同时满足，
     #   单独一个很弱的相关性不算证据。
     # 换嵌入模型或分词方式后，这三个阈值都需要重新标定。
-    vector_evidence = any((item.get("vector_score") or 0) >= config.MIN_VECTOR_SCORE for item in top)
+    vector_evidence = any((item.get("vector_score") or 0) >= min_vector for item in top)
     bm25_evidence = any(
         (item.get("bm25_score") or 0) < -0.05 and _lexical_score(question, item["text"]) >= 0.18
         for item in top
@@ -241,8 +255,10 @@ def _retrieval_metrics(libraries, ranked, top, query_rewrites=0):
 
 
 def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_id=None,
-             ranked=None, top=None, queries=None, timings=None):
+             ranked=None, top=None, queries=None, timings=None, state=None):
     # 拒答也写入 answers，保证历史对话完整；sources 为空、grounded=False。
+    experiment = (state or {}).get("experiment")
+    config_overrides = (state or {}).get("retrieval_config")
     messages = {
         "no_approved_permission": (
             "当前账号还没有任何已审批的知识库权限，暂不作答。"
@@ -271,6 +287,8 @@ def _refusal(question, user_id, libraries, reason, retrieval=None, conversation_
         ranked=ranked or [],
         top=top or [],
         timings=timings or {},
+        experiment=experiment,
+        config_overrides=config_overrides,
     )
     return {
         "answer_id": answer_id,
@@ -288,21 +306,24 @@ def _ask_legacy(question, user_id):
     if not libraries:
         return _refusal(question, user_id, [], "no_approved_permission")
 
-    ranked = _hybrid_search(question, libraries)
-    top = ranked[: config.RERANK_TOP_K]
+    retrieval_config, experiment = experiments.resolve_retrieval_config(user_id)
+    rerank_top_k = int(_param(retrieval_config, "RERANK_TOP_K"))
+    ranked = _hybrid_search(question, libraries, retrieval_config)
+    top = ranked[:rerank_top_k]
     rewrite_count = 0
-    if not _has_grounded_evidence(question, top):
+    if not _has_grounded_evidence(question, top, retrieval_config):
         rewritten = _rewrite_query(question) if config.RAG_QUERY_REWRITE_LIMIT else ""
         if rewritten:
             rewrite_count += 1
-            ranked = _hybrid_search(rewritten, libraries)
-            top = ranked[: config.RERANK_TOP_K]
-    if not _has_grounded_evidence(question, top):
+            ranked = _hybrid_search(rewritten, libraries, retrieval_config)
+            top = ranked[:rerank_top_k]
+    if not _has_grounded_evidence(question, top, retrieval_config):
         return _refusal(
             question, user_id, libraries, "no_grounded_evidence",
             _retrieval_metrics(libraries, ranked, top, rewrite_count),
             ranked=ranked, top=top,
             queries=[question] + ([rewritten] if rewrite_count else []),
+            state={"experiment": experiment, "retrieval_config": retrieval_config},
         )
     sources = []
     context_parts = []
@@ -332,6 +353,8 @@ def _ask_legacy(question, user_id):
             "libraries": libraries,
             "ranked": ranked,
             "top": top,
+            "experiment": experiment,
+            "retrieval_config": retrieval_config,
         },
         answer_id,
         True,
@@ -374,6 +397,8 @@ class RagState(TypedDict, total=False):
     result: dict
     stop: bool
     refusal_reason: str
+    retrieval_config: dict
+    experiment: dict
 
 
 def _graph_authorize(state):
@@ -393,13 +418,16 @@ def _graph_authorize(state):
 
 def _graph_retrieve(state):
     query = state.get("retrieval_query") or state["question"]
-    ranked = _hybrid_search(query, state["libraries"])
-    return {"ranked": ranked, "top": ranked[: config.RERANK_TOP_K]}
+    cfg = state.get("retrieval_config")
+    ranked = _hybrid_search(query, state["libraries"], cfg)
+    rerank_top_k = int(_param(cfg, "RERANK_TOP_K"))
+    return {"ranked": ranked, "top": ranked[:rerank_top_k]}
 
 
 def _graph_ground(state):
     top = state.get("top", [])
-    if not _has_grounded_evidence(state["question"], top):
+    cfg = state.get("retrieval_config")
+    if not _has_grounded_evidence(state["question"], top, cfg):
         if state.get("rewrite_count", 0) < config.RAG_QUERY_REWRITE_LIMIT:
             return {"needs_rewrite": True, "stop": False}
         return {
@@ -418,6 +446,7 @@ def _graph_ground(state):
                 top=top,
                 queries=_trace_queries(state),
                 timings=_timings(state),
+                state=state,
             ),
         }
 
@@ -451,6 +480,7 @@ def _graph_rewrite(state):
             top=state.get("top", []),
             queries=_trace_queries(state),
             timings=_timings(state),
+            state=state,
         )
         return {"stop": True, "needs_rewrite": False, "result": result}
     return {
@@ -510,6 +540,9 @@ def prepare(question, user_id, conversation_id=None):
     state.update(_graph_authorize(state))
     if state.get("stop"):
         return state["result"]
+    state["retrieval_config"], state["experiment"] = (
+        experiments.resolve_retrieval_config(user_id)
+    )
     while True:
         state.update(_graph_retrieve(state))
         state.update(_graph_ground(state))

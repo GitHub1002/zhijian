@@ -241,6 +241,38 @@ def init_db():
                 ON curated_examples(status, use_as_few_shot, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_curated_library
                 ON curated_examples(library);
+            CREATE TABLE IF NOT EXISTS experiments (
+                key TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft',
+                assignment_unit TEXT NOT NULL DEFAULT 'user',
+                guardrails_json TEXT NOT NULL DEFAULT '{}',
+                start_at TEXT,
+                end_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS experiment_variants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_key TEXT NOT NULL REFERENCES experiments(key) ON DELETE CASCADE,
+                variant_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config_json TEXT NOT NULL DEFAULT '{}',
+                traffic_pct INTEGER NOT NULL DEFAULT 0,
+                is_control INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(experiment_key, variant_key)
+            );
+            CREATE TABLE IF NOT EXISTS experiment_assignments (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                experiment_key TEXT NOT NULL REFERENCES experiments(key) ON DELETE CASCADE,
+                variant_key TEXT NOT NULL,
+                assigned_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, experiment_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant
+                ON experiment_assignments(experiment_key, variant_key);
             CREATE TABLE IF NOT EXISTS answer_traces (
                 trace_id TEXT PRIMARY KEY,
                 answer_id INTEGER UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
@@ -405,9 +437,9 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback(sentiment, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
-        conn.execute("PRAGMA user_version = 4")
+        conn.execute("PRAGMA user_version = 5")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '4', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '5', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )

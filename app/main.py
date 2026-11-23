@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import analytics, config, content, content_store, curated_store, db, documents, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
+from . import analytics, config, content, content_store, curated_store, db, documents, experiments, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,28 @@ class ContentTaskFromFeedbackRequest(BaseModel):
 class CuratedExampleUpdateRequest(BaseModel):
     status: Optional[Literal["candidate", "approved", "rejected"]] = None
     use_as_few_shot: Optional[bool] = None
+
+
+class ExperimentVariantRequest(BaseModel):
+    variant_key: str = Field(min_length=1, max_length=40)
+    name: str = Field(default="", max_length=80)
+    config: dict = Field(default_factory=dict)
+    traffic_pct: int = Field(default=0, ge=0, le=100)
+    is_control: bool = False
+
+
+class ExperimentRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=60)
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    variants: list[ExperimentVariantRequest] = Field(min_length=1, max_length=10)
+    guardrails: dict = Field(default_factory=dict)
+
+
+class ExperimentUpdateRequest(BaseModel):
+    status: Optional[Literal["draft", "running", "paused", "ended"]] = None
+    variants: Optional[list[ExperimentVariantRequest]] = None
+    guardrails: Optional[dict] = None
 
 
 class DocRequest(BaseModel):
@@ -581,6 +603,64 @@ def admin_update_curated_example(
     if not example:
         raise HTTPException(status_code=404, detail="精选正例不存在")
     return {"ok": True, "example": example}
+
+
+@app.get("/api/admin/experiments")
+def admin_experiments(_admin=Depends(admin_user)):
+    return {"items": experiments.list_experiments()}
+
+
+@app.post("/api/admin/experiments")
+def admin_create_experiment(req: ExperimentRequest, _admin=Depends(admin_user)):
+    try:
+        item = experiments.create_experiment(
+            req.key,
+            req.name,
+            req.description,
+            [variant.model_dump() for variant in req.variants],
+            req.guardrails,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"ok": True, "experiment": item}
+
+
+@app.get("/api/admin/experiments/{key}")
+def admin_experiment_detail(key: str, _admin=Depends(admin_user)):
+    item = experiments.get_experiment(key)
+    if not item:
+        raise HTTPException(status_code=404, detail="实验不存在")
+    return {"experiment": item}
+
+
+@app.patch("/api/admin/experiments/{key}")
+def admin_update_experiment(
+    key: str, req: ExperimentUpdateRequest, _admin=Depends(admin_user)
+):
+    try:
+        item = experiments.update_experiment(
+            key,
+            status=req.status,
+            variants=[variant.model_dump() for variant in req.variants]
+            if req.variants is not None
+            else None,
+            guardrails=req.guardrails,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if not item:
+        raise HTTPException(status_code=404, detail="实验不存在")
+    return {"ok": True, "experiment": item}
+
+
+@app.get("/api/admin/experiments/{key}/results")
+def admin_experiment_results(
+    key: str, days: int = 14, _admin=Depends(admin_user)
+):
+    item = experiments.experiment_results(key, days)
+    if not item:
+        raise HTTPException(status_code=404, detail="实验不存在")
+    return item
 
 
 def _ask_error_detail(exc):

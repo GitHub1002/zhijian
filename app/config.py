@@ -45,6 +45,9 @@ RAG_QUERY_REWRITE_LIMIT = max(0, min(int(os.getenv("RAG_QUERY_REWRITE_LIMIT", "0
 # 精选正例默认不进入提示词：需要管理员审核 + 这里显式打开。
 CURATED_FEWSHOT_ENABLED = os.getenv("CURATED_FEWSHOT_ENABLED", "0").lower() in {"1", "true", "yes"}
 CURATED_FEWSHOT_LIMIT = max(1, min(int(os.getenv("CURATED_FEWSHOT_LIMIT", "3")), 10))
+# 在线实验默认关闭；打开后按用户确定性分桶，只允许覆盖检索参数。
+EXPERIMENTS_ENABLED = os.getenv("EXPERIMENTS_ENABLED", "0").lower() in {"1", "true", "yes"}
+EXPERIMENT_CACHE_SECONDS = max(1, int(os.getenv("EXPERIMENT_CACHE_SECONDS", "60")))
 
 # 反馈编辑窗口与轨迹保留期。反馈只做轻量校验，不在这里调用大模型。
 FEEDBACK_EDIT_WINDOW_HOURS = int(os.getenv("FEEDBACK_EDIT_WINDOW_HOURS", "168"))
