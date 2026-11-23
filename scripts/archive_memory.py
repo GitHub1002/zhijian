@@ -12,7 +12,12 @@ def main():
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     payload = {}
     with db.connect() as conn:
-        for table in ("assistant_memory", "learning_notes"):
+        for table in (
+            "assistant_memory",
+            "learning_notes",
+            "legacy_assistant_memory",
+            "legacy_learning_notes",
+        ):
             exists = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
             ).fetchone()

@@ -86,6 +86,22 @@ def _add_column(conn, table, name, ddl):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
+def _archive_table(conn, old, archive):
+    """把已停用的表改名到 legacy_*；两边都存在时先并数据再删旧表。"""
+    if not _table_exists(conn, old):
+        return False
+    if not _table_exists(conn, archive):
+        conn.execute(f"ALTER TABLE {old} RENAME TO {archive}")
+        return True
+    shared = sorted(_columns(conn, old) & _columns(conn, archive))
+    if not shared:
+        return False
+    names = ", ".join(shared)
+    conn.execute(f"INSERT OR IGNORE INTO {archive}({names}) SELECT {names} FROM {old}")
+    conn.execute(f"DROP TABLE {old}")
+    return True
+
+
 def _load_json(value, fallback):
     try:
         parsed = json.loads(value or "")
@@ -358,20 +374,6 @@ def init_db():
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            -- 阶段 1 暂时保留旧表，避免旧代码在新库上启动失败。
-            -- 阶段 3 删除 memory 读写后再移除这两张表的建表语句。
-            CREATE TABLE IF NOT EXISTS assistant_memory (
-                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-                summary TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS learning_notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                feedback_id INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
-                note TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS permission_catalog (
                 permission_key TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -466,9 +468,9 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback(sentiment, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
-        conn.execute("PRAGMA user_version = 7")
+        conn.execute("PRAGMA user_version = 8")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '7', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '8', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )
@@ -477,6 +479,9 @@ def init_db():
                 "INSERT INTO permission_catalog(permission_key, name, description) VALUES (?, ?, ?) ON CONFLICT(permission_key) DO UPDATE SET name=excluded.name, description=excluded.description",
                 (item["key"], item["name"], item["description"]),
             )
+        # 旧记忆表已无读写点，改名归档，主库不再保留。
+        _archive_table(conn, "assistant_memory", "legacy_assistant_memory")
+        _archive_table(conn, "learning_notes", "legacy_learning_notes")
         _rebuild_fts_index(conn)
 
 
