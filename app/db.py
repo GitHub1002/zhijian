@@ -289,6 +289,19 @@ def init_db():
                 ON source_clicks(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_source_clicks_library
                 ON source_clicks(library, created_at DESC);
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL DEFAULT '',
+                target_id TEXT NOT NULL DEFAULT '',
+                detail_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_created
+                ON admin_audit_log(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_action
+                ON admin_audit_log(action, created_at DESC);
             CREATE TABLE IF NOT EXISTS answer_traces (
                 trace_id TEXT PRIMARY KEY,
                 answer_id INTEGER UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
@@ -453,9 +466,9 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback(sentiment, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
-        conn.execute("PRAGMA user_version = 6")
+        conn.execute("PRAGMA user_version = 7")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '6', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '7', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )

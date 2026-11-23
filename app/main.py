@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import analytics, config, content, content_store, curated_store, db, documents, experiments, feedback as feedback_rules, ingest, llm, md_render, observability, rag, tracing
+from . import analytics, audit, config, content, content_store, curated_store, db, documents, experiments, feedback as feedback_rules, ingest, llm, md_render, observability, rag, tracing
 
 logger = logging.getLogger(__name__)
 
@@ -322,11 +322,15 @@ def review_permission(request_id: int, req: PermissionReviewRequest, admin=Depen
     result = db.review_permission(request_id, req.status, admin["id"])
     if result is None:
         raise HTTPException(status_code=404, detail="权限申请不存在，或审批状态不合法")
+    audit.log(
+        admin["id"], "permission.review", "permission_request", request_id,
+        {"status": req.status},
+    )
     return {"ok": True, "request": result}
 
 
 @app.post("/api/admin/users/{user_id}/reset-quota")
-def admin_reset_quota(user_id: int, _admin=Depends(admin_user)):
+def admin_reset_quota(user_id: int, admin=Depends(admin_user)):
     users = {user["id"]: user for user in db.list_users()}
     target = users.get(user_id)
     if not target:
@@ -335,6 +339,7 @@ def admin_reset_quota(user_id: int, _admin=Depends(admin_user)):
         raise HTTPException(status_code=400, detail="管理员没有每日额度，无需重置")
     if not db.reset_quota(user_id):
         raise HTTPException(status_code=404, detail="用户不存在")
+    audit.log(admin["id"], "user.reset_quota", "user", user_id)
     return {"ok": True, "user": {**target, "quota": db.quota_status(user_id)}}
 
 
@@ -349,6 +354,7 @@ def admin_delete_user(user_id: int, admin=Depends(admin_user)):
     if result in messages:
         status, detail = messages[result]
         raise HTTPException(status_code=status, detail=detail)
+    audit.log(admin["id"], "user.delete", "user", user_id)
     return {"ok": True, "deleted_user_id": user_id}
 
 
@@ -438,6 +444,9 @@ def admin_feedback_export(
     writer.writerow([label for _, label in FEEDBACK_CSV_COLUMNS])
     for row in rows:
         writer.writerow([_csv_cell(row.get(key)) for key, _ in FEEDBACK_CSV_COLUMNS])
+    audit.log(
+        _admin["id"], "feedback.export", "feedback", None, {"rows": len(rows)}
+    )
     # 带 BOM，Excel 直接打开中文不乱码。
     return Response(
         content=chr(0xFEFF) + output.getvalue(),
@@ -463,6 +472,10 @@ def admin_feedback_triage(
     item = db.triage_feedback(feedback_id, admin["id"], req.status, req.category, req.note)
     if not item:
         raise HTTPException(status_code=404, detail="反馈不存在")
+    audit.log(
+        admin["id"], "feedback.triage", "feedback", feedback_id,
+        {"status": req.status, "category": req.category},
+    )
     return {"ok": True, "feedback": item}
 
 
@@ -531,6 +544,10 @@ def admin_create_content_task(req: ContentTaskRequest, admin=Depends(admin_user)
         eval_run_id=req.eval_run_id,
         created_by=admin["id"],
     )
+    audit.log(
+        admin["id"], "content_task.create", "content_task", task["id"],
+        {"kind": req.kind, "priority": req.priority},
+    )
     return {"ok": True, "task": task}
 
 
@@ -559,6 +576,10 @@ def admin_update_content_task(
     )
     if not task:
         raise HTTPException(status_code=404, detail="内容任务不存在")
+    audit.log(
+        admin["id"], "content_task.update", "content_task", task_id,
+        {"status": req.status, "priority": req.priority, "kind": req.kind},
+    )
     return {"ok": True, "task": task}
 
 
@@ -576,6 +597,10 @@ def admin_task_from_feedback(
         raise HTTPException(status_code=422, detail=str(exc))
     if not result:
         raise HTTPException(status_code=404, detail="反馈不存在")
+    audit.log(
+        admin["id"], "content_task.from_feedback", "feedback", feedback_id,
+        {"task_id": result["task"]["id"], "created": result["created"]},
+    )
     return {"ok": True, **result}
 
 
@@ -612,6 +637,10 @@ def admin_update_curated_example(
     )
     if not example:
         raise HTTPException(status_code=404, detail="精选正例不存在")
+    audit.log(
+        admin["id"], "curated.update", "curated_example", example_id,
+        {"status": req.status, "use_as_few_shot": req.use_as_few_shot},
+    )
     return {"ok": True, "example": example}
 
 
@@ -621,7 +650,7 @@ def admin_experiments(_admin=Depends(admin_user)):
 
 
 @app.post("/api/admin/experiments")
-def admin_create_experiment(req: ExperimentRequest, _admin=Depends(admin_user)):
+def admin_create_experiment(req: ExperimentRequest, admin=Depends(admin_user)):
     try:
         item = experiments.create_experiment(
             req.key,
@@ -632,6 +661,10 @@ def admin_create_experiment(req: ExperimentRequest, _admin=Depends(admin_user)):
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    audit.log(
+        admin["id"], "experiment.create", "experiment", item["key"],
+        {"variants": [variant["variant_key"] for variant in item["variants"]]},
+    )
     return {"ok": True, "experiment": item}
 
 
@@ -645,7 +678,7 @@ def admin_experiment_detail(key: str, _admin=Depends(admin_user)):
 
 @app.patch("/api/admin/experiments/{key}")
 def admin_update_experiment(
-    key: str, req: ExperimentUpdateRequest, _admin=Depends(admin_user)
+    key: str, req: ExperimentUpdateRequest, admin=Depends(admin_user)
 ):
     try:
         item = experiments.update_experiment(
@@ -660,6 +693,10 @@ def admin_update_experiment(
         raise HTTPException(status_code=422, detail=str(exc))
     if not item:
         raise HTTPException(status_code=404, detail="实验不存在")
+    audit.log(
+        admin["id"], "experiment.update", "experiment", key,
+        {"status": req.status, "variants": req.variants is not None},
+    )
     return {"ok": True, "experiment": item}
 
 
@@ -671,6 +708,28 @@ def admin_experiment_results(
     if not item:
         raise HTTPException(status_code=404, detail="实验不存在")
     return item
+
+
+@app.get("/api/admin/audit-log")
+def admin_audit_log(
+    page: int = 1,
+    page_size: int = 20,
+    action: Optional[str] = None,
+    target_type: Optional[str] = None,
+    actor_id: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    _admin=Depends(admin_user),
+):
+    return audit.list_events(
+        page=page,
+        page_size=page_size,
+        action=action,
+        target_type=target_type,
+        actor_id=actor_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 def _ask_error_detail(exc):
