@@ -191,6 +191,37 @@ def init_db():
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS content_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL DEFAULT '',
+                heading TEXT NOT NULL DEFAULT '',
+                library TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT 'doc_fix',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                status TEXT NOT NULL DEFAULT 'open',
+                owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                feedback_id INTEGER REFERENCES feedback(id) ON DELETE SET NULL,
+                eval_run_id INTEGER,
+                resolution_note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_content_tasks_status
+                ON content_tasks(status, priority, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_content_tasks_source
+                ON content_tasks(source, heading);
+            CREATE TABLE IF NOT EXISTS content_task_feedback (
+                task_id INTEGER NOT NULL REFERENCES content_tasks(id) ON DELETE CASCADE,
+                feedback_id INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, feedback_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_content_task_feedback_feedback
+                ON content_task_feedback(feedback_id);
             CREATE TABLE IF NOT EXISTS answer_traces (
                 trace_id TEXT PRIMARY KEY,
                 answer_id INTEGER UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
@@ -355,9 +386,9 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback(sentiment, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
-        conn.execute("PRAGMA user_version = 2")
+        conn.execute("PRAGMA user_version = 3")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '2', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '3', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )
@@ -978,6 +1009,7 @@ def triage_feedback(feedback_id, actor_id, status, category, note=""):
         )
         updated = conn.execute("SELECT * FROM feedback WHERE id = ?", (feedback_id,)).fetchone()
         return _feedback_dict(conn, updated)
+
 
 
 def recent_answers(user_id, limit=5, conversation_id=None):

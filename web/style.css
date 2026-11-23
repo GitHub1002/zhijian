@@ -738,6 +738,26 @@ body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
 .admin-analytics-table th { text-align: left; font-weight: 500; color: var(--ink-3); padding: 5px 6px; border-bottom: 1px solid var(--line); }
 .admin-analytics-table td { padding: 6px; border-bottom: 1px solid var(--line); color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .admin-reason-list { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
+.admin-quality-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+.admin-quality-tabs button {
+  border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer;
+  padding: 7px 12px; font-size: 13px; color: var(--ink-3);
+}
+.admin-quality-tabs button:hover { color: var(--ink-2); }
+.admin-quality-tabs button.active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 500; }
+.admin-task-list { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
+.admin-task-row {
+  display: flex; gap: 12px; align-items: center;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-s);
+  background: var(--bg-sub);
+}
+.admin-task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.admin-task-main strong { font-size: 13px; font-weight: 500; color: var(--ink); }
+.admin-task-main small { font-size: 12px; color: var(--ink-3); }
+.admin-task-row select {
+  border: 1px solid var(--line-2); border-radius: var(--r-s);
+  background: var(--bg); padding: 6px 8px; font-size: 12.5px;
+}
 .permission-status.new { color: var(--ink-3); background: var(--bg-sub); }
 .permission-status.triaged { color: var(--ink-2); background: var(--bg-sub); }
 .permission-status.in_progress { color: var(--ink); background: var(--bg-sub); }

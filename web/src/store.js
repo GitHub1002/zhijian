@@ -51,6 +51,13 @@ export const state = reactive({
   adminAnalyticsReasons: [],
   adminAnalyticsCategories: [],
   adminAnalyticsState: '',
+  adminQualityTab: 'feedback',
+  adminContentTasks: [],
+  adminContentTaskPage: 1,
+  adminContentTaskPages: 1,
+  adminContentTaskTotal: 0,
+  adminContentTaskState: '',
+  adminContentTaskFilters: { status: '', priority: '' },
   permissionOpen: false,
   permissions: [],
   permissionState: '',
@@ -493,7 +500,64 @@ export async function loadFeedbackForAnswer(answerId) {
 export async function openAdminFeedback() {
   state.adminFeedbackOpen = true
   state.adminFeedbackDetail = null
-  await Promise.all([loadAdminFeedback(1), loadAdminAnalytics()])
+  await Promise.all([
+    loadAdminFeedback(1),
+    loadAdminAnalytics(),
+    state.adminQualityTab === 'tasks' ? loadAdminContentTasks(1) : Promise.resolve(),
+  ])
+}
+
+export async function loadAdminContentTasks(page = 1) {
+  state.adminContentTaskState = '正在加载内容任务…'
+  const params = new URLSearchParams({ page: String(page), page_size: '20' })
+  Object.entries(state.adminContentTaskFilters).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  try {
+    const data = await api(`/api/admin/content-tasks?${params.toString()}`)
+    state.adminContentTasks = data.items || []
+    state.adminContentTaskPage = data.page || 1
+    state.adminContentTaskPages = data.pages || 1
+    state.adminContentTaskTotal = data.total || 0
+    state.adminContentTaskState = ''
+  } catch (error) {
+    state.adminContentTaskState = error.message
+  }
+}
+
+export async function createTaskFromFeedback(feedbackId) {
+  try {
+    const data = await api(`/api/admin/feedback/${encodeURIComponent(feedbackId)}/task`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    notify(data.created ? '已创建内容任务' : '已关联到现有内容任务', 'success')
+    await Promise.all([
+      loadAdminFeedback(state.adminFeedbackPage),
+      loadAdminContentTasks(1),
+    ])
+    return data.task
+  } catch (error) {
+    notify(error.message, 'error')
+    return null
+  }
+}
+
+export async function updateContentTask(taskId, payload) {
+  try {
+    const data = await api(`/api/admin/content-tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+    state.adminContentTasks = state.adminContentTasks.map(item =>
+      item.id === data.task.id ? data.task : item
+    )
+    notify('内容任务已更新', 'success')
+    return data.task
+  } catch (error) {
+    notify(error.message, 'error')
+    return null
+  }
 }
 
 export async function loadAdminAnalytics() {

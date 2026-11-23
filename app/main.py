@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import analytics, config, db, documents, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
+from . import analytics, config, content, content_store, db, documents, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # 字体与常用前端资源的 MIME 修正，避免被识别为 octet-stream 导致浏览器拒绝加载
@@ -72,6 +72,36 @@ class FeedbackTriageRequest(BaseModel):
     status: Literal["new", "triaged", "in_progress", "resolved", "dismissed"]
     category: str
     note: str = Field(default="", max_length=2000)
+
+
+class ContentTaskRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4000)
+    source: str = Field(default="", max_length=300)
+    heading: str = Field(default="", max_length=300)
+    library: str = Field(default="", max_length=40)
+    kind: str = "doc_fix"
+    priority: str = "medium"
+    owner_id: Optional[int] = None
+    eval_run_id: Optional[int] = None
+
+
+class ContentTaskUpdateRequest(BaseModel):
+    status: Optional[Literal["open", "in_progress", "resolved", "dismissed"]] = None
+    priority: Optional[Literal["low", "medium", "high"]] = None
+    kind: Optional[str] = None
+    owner_id: Optional[int] = None
+    resolution_note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ContentTaskFromFeedbackRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    source: Optional[str] = Field(default=None, max_length=300)
+    heading: Optional[str] = Field(default=None, max_length=300)
+    library: Optional[str] = Field(default=None, max_length=40)
+    kind: Optional[str] = None
+    priority: Optional[str] = None
 
 
 class DocRequest(BaseModel):
@@ -419,6 +449,94 @@ def admin_analytics_reasons(days: int = analytics.DEFAULT_DAYS, _admin=Depends(a
 @app.get("/api/admin/analytics/categories")
 def admin_analytics_categories(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
     return {"items": analytics.categories(days)}
+
+
+@app.get("/api/admin/content-tasks")
+def admin_content_tasks(
+    page: int = 1,
+    page_size: int = 20,
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    kind: Optional[str] = None,
+    library: Optional[str] = None,
+    q: Optional[str] = None,
+    _admin=Depends(admin_user),
+):
+    return content_store.list_content_tasks(
+        page=page,
+        page_size=page_size,
+        status=status,
+        priority=priority,
+        kind=kind,
+        library=library,
+        q=(q or "")[:100] or None,
+    )
+
+
+@app.post("/api/admin/content-tasks")
+def admin_create_content_task(req: ContentTaskRequest, admin=Depends(admin_user)):
+    if req.kind not in content.KINDS:
+        raise HTTPException(status_code=422, detail="未知任务类型")
+    if req.priority not in content.PRIORITIES:
+        raise HTTPException(status_code=422, detail="未知优先级")
+    task = content_store.create_content_task(
+        title=req.title,
+        description=req.description,
+        source=req.source,
+        heading=req.heading,
+        library=req.library,
+        kind=req.kind,
+        priority=req.priority,
+        owner_id=req.owner_id,
+        eval_run_id=req.eval_run_id,
+        created_by=admin["id"],
+    )
+    return {"ok": True, "task": task}
+
+
+@app.get("/api/admin/content-tasks/{task_id}")
+def admin_content_task_detail(task_id: int, _admin=Depends(admin_user)):
+    task = content_store.get_content_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="内容任务不存在")
+    return {"task": task}
+
+
+@app.patch("/api/admin/content-tasks/{task_id}")
+def admin_update_content_task(
+    task_id: int, req: ContentTaskUpdateRequest, admin=Depends(admin_user)
+):
+    if req.kind is not None and req.kind not in content.KINDS:
+        raise HTTPException(status_code=422, detail="未知任务类型")
+    task = content_store.update_content_task(
+        task_id,
+        status=req.status,
+        priority=req.priority,
+        kind=req.kind,
+        owner_id=req.owner_id,
+        resolution_note=req.resolution_note,
+        updated_by=admin["id"],
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="内容任务不存在")
+    return {"ok": True, "task": task}
+
+
+@app.post("/api/admin/feedback/{feedback_id}/task")
+def admin_task_from_feedback(
+    feedback_id: int,
+    req: Optional[ContentTaskFromFeedbackRequest] = None,
+    admin=Depends(admin_user),
+):
+    try:
+        result = content.create_task_for_feedback(
+            feedback_id, admin["id"], req.model_dump() if req else {}
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if not result:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    return {"ok": True, **result}
 
 
 def _ask_error_detail(exc):

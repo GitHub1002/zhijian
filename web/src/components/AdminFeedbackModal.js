@@ -3,6 +3,9 @@ import {
   loadAdminFeedback,
   loadAdminFeedbackDetail,
   loadAdminAnalytics,
+  loadAdminContentTasks,
+  createTaskFromFeedback,
+  updateContentTask,
   exportAdminFeedback,
   triageFeedback,
 } from '../store.js'
@@ -40,6 +43,26 @@ const REASON_LABELS = {
   other: '其他',
 }
 const CATEGORY_LABELS = Object.fromEntries(CATEGORY_OPTIONS)
+const TASK_KIND_LABELS = {
+  doc_fix: '文档修正',
+  doc_update: '文档更新',
+  doc_missing: '文档缺失',
+  citation_fix: '引用修正',
+  retrieval_gap: '检索缺口',
+  other: '其他',
+}
+const TASK_PRIORITY_LABELS = { low: '低', medium: '中', high: '高' }
+const TASK_STATUS_OPTIONS = [
+  ['open', '待处理'],
+  ['in_progress', '处理中'],
+  ['resolved', '已解决'],
+  ['dismissed', '已忽略'],
+]
+const TASK_PRIORITY_OPTIONS = [
+  ['high', '高'],
+  ['medium', '中'],
+  ['low', '低'],
+]
 
 export default {
   setup() {
@@ -66,6 +89,33 @@ export default {
     function refreshAll() {
       loadAdminFeedback(1)
       loadAdminAnalytics()
+      loadAdminContentTasks(1)
+    }
+
+    function switchTab(tab) {
+      state.adminQualityTab = tab
+      if (tab === 'tasks') loadAdminContentTasks(1)
+    }
+
+    function loadTasks(page) {
+      loadAdminContentTasks(page)
+    }
+
+    function saveTask(task) {
+      updateContentTask(task.id, { status: task.status, priority: task.priority })
+    }
+
+    function makeTask() {
+      const detail = state.adminFeedbackDetail
+      if (detail) createTaskFromFeedback(detail.id)
+    }
+
+    function taskKindLabel(value) {
+      return TASK_KIND_LABELS[value] || value
+    }
+
+    function taskPriorityLabel(value) {
+      return TASK_PRIORITY_LABELS[value] || value
     }
 
     function triageDetail() {
@@ -89,10 +139,18 @@ export default {
       reasonLabel,
       categoryLabel,
       refreshAll,
+      switchTab,
+      loadTasks,
+      saveTask,
+      makeTask,
+      taskKindLabel,
+      taskPriorityLabel,
       triageDetail,
       statusOptions: STATUS_OPTIONS,
       categoryOptions: CATEGORY_OPTIONS,
       sentimentOptions: SENTIMENT_OPTIONS,
+      taskStatusOptions: TASK_STATUS_OPTIONS,
+      taskPriorityOptions: TASK_PRIORITY_OPTIONS,
     }
   },
   template: `
@@ -103,6 +161,11 @@ export default {
           <button class="modal-close" type="button" aria-label="关闭" @click="state.adminFeedbackOpen = false">×</button>
         </div>
         <div class="modal-body">
+          <div class="admin-quality-tabs">
+            <button type="button" :class="{ active: state.adminQualityTab === 'feedback' }" @click="switchTab('feedback')">反馈队列</button>
+            <button type="button" :class="{ active: state.adminQualityTab === 'tasks' }" @click="switchTab('tasks')">内容任务<span v-if="state.adminContentTaskTotal"> · {{ state.adminContentTaskTotal }}</span></button>
+          </div>
+          <div v-if="state.adminQualityTab === 'feedback'">
           <p class="admin-copy">点踩会带上原因、来源标记和当次检索轨迹。先看问题是“没检索到”还是“检索到但答错”，再决定修检索、修 prompt 还是补文档。</p>
           <div v-if="state.adminAnalyticsState" class="admin-users-state">{{ state.adminAnalyticsState }}</div>
           <div v-else-if="state.adminAnalyticsOverview" class="admin-analytics">
@@ -219,9 +282,43 @@ export default {
                   </select>
                   <textarea v-model="state.adminFeedbackDetail.triage_note" placeholder="处理备注"></textarea>
                   <button class="primary-btn" type="button" @click="triageDetail">保存状态</button>
+                  <button v-if="state.adminFeedbackDetail.sentiment === 'negative'" class="toolbar-btn" type="button" @click="makeTask">建内容任务</button>
                 </div>
               </template>
               <div v-else class="admin-empty">从左侧选择一条反馈查看详情。</div>
+            </div>
+          </div>
+          </div>
+          <div v-else class="admin-tasks">
+            <div class="admin-feedback-filters">
+              <select v-model="state.adminContentTaskFilters.status" @change="loadTasks(1)">
+                <option value="">全部状态</option>
+                <option v-for="item in taskStatusOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option>
+              </select>
+              <select v-model="state.adminContentTaskFilters.priority" @change="loadTasks(1)">
+                <option value="">全部优先级</option>
+                <option v-for="item in taskPriorityOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option>
+              </select>
+              <button class="toolbar-btn" type="button" @click="loadTasks(1)">刷新</button>
+            </div>
+            <div v-if="state.adminContentTaskState" class="admin-users-state">{{ state.adminContentTaskState }}</div>
+            <div class="admin-task-list">
+              <div v-if="!state.adminContentTasks.length" class="admin-empty">还没有内容任务。到反馈详情里点“建内容任务”。</div>
+              <div v-for="task in state.adminContentTasks" :key="task.id" class="admin-task-row">
+                <div class="admin-task-main">
+                  <strong>#{{ task.id }} {{ task.title }}</strong>
+                  <small>{{ taskKindLabel(task.kind) }} · {{ taskPriorityLabel(task.priority) }} · {{ task.source }}{{ task.heading ? ' > ' + task.heading : '' }} · 关联反馈 {{ task.feedback_count }}</small>
+                  <p v-if="task.resolution_note" class="admin-feedback-comment">{{ task.resolution_note }}</p>
+                </div>
+                <select v-model="task.status" @change="saveTask(task)">
+                  <option v-for="item in taskStatusOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="admin-feedback-pagination">
+              <button type="button" :disabled="state.adminContentTaskPage <= 1" @click="loadTasks(state.adminContentTaskPage - 1)">上一页</button>
+              <span>第 {{ state.adminContentTaskPage }} / {{ state.adminContentTaskPages }} 页 · 共 {{ state.adminContentTaskTotal }} 条</span>
+              <button type="button" :disabled="state.adminContentTaskPage >= state.adminContentTaskPages" @click="loadTasks(state.adminContentTaskPage + 1)">下一页</button>
             </div>
           </div>
         </div>
