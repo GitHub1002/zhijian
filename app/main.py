@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import analytics, config, content, content_store, curated_store, db, documents, experiments, feedback as feedback_rules, ingest, llm, md_render, rag, tracing
+from . import analytics, config, content, content_store, curated_store, db, documents, experiments, feedback as feedback_rules, ingest, llm, md_render, observability, rag, tracing
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 for _ext, _mime in ((".ttf", "font/ttf"), (".woff", "font/woff"), (".woff2", "font/woff2"), (".otf", "font/otf")):
     mimetypes.add_type(_mime, _ext)
 app = FastAPI(title="智检")
+app.middleware("http")(observability.middleware)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
