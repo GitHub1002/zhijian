@@ -125,6 +125,7 @@ export default {
 
     function switchTab(tab) {
       state.adminQualityTab = tab
+      if (tab === 'overview') loadAdminAnalytics()
       if (tab === 'tasks') loadAdminContentTasks(1)
       if (tab === 'curated') loadAdminCuratedExamples(1)
       if (tab === 'experiments') loadAdminExperiments()
@@ -285,13 +286,15 @@ export default {
         </div>
         <div class="modal-body">
           <div class="admin-quality-tabs">
+            <button type="button" :class="{ active: state.adminQualityTab === 'overview' }" @click="switchTab('overview')">概览</button>
             <button type="button" :class="{ active: state.adminQualityTab === 'feedback' }" @click="switchTab('feedback')">反馈队列</button>
             <button type="button" :class="{ active: state.adminQualityTab === 'tasks' }" @click="switchTab('tasks')">内容任务<span v-if="state.adminContentTaskTotal"> · {{ state.adminContentTaskTotal }}</span></button>
             <button type="button" :class="{ active: state.adminQualityTab === 'curated' }" @click="switchTab('curated')">精选正例<span v-if="state.adminCuratedTotal"> · {{ state.adminCuratedTotal }}</span></button>
             <button type="button" :class="{ active: state.adminQualityTab === 'experiments' }" @click="switchTab('experiments')">实验<span v-if="state.adminExperiments.length"> · {{ state.adminExperiments.length }}</span></button>
           </div>
-          <div v-if="state.adminQualityTab === 'feedback'">
-          <p class="admin-copy">点踩会带上原因、来源标记和当次检索轨迹。先看问题是“没检索到”还是“检索到但答错”，再决定修检索、修 prompt 还是补文档。</p>
+          <div v-if="state.adminQualityTab === 'overview'">
+          <p class="admin-copy">近 30 天的回答、拒答、反馈和引用点击概览。数据按 UTC 时间窗口聚合。</p>
+          <div class="admin-analytics-shell">
           <div v-if="state.adminAnalyticsState" class="admin-users-state">{{ state.adminAnalyticsState }}</div>
           <div v-else-if="state.adminAnalyticsOverview" class="admin-analytics">
             <div class="admin-analytics-cards">
@@ -339,6 +342,10 @@ export default {
               </div>
             </div>
           </div>
+          </div>
+          </div>
+          <div v-else-if="state.adminQualityTab === 'feedback'">
+          <p class="admin-copy">点踩会带上原因、来源标记和当次检索轨迹。先看问题是“没检索到”还是“检索到但答错”，再决定修检索、修 prompt 还是补文档。</p>
           <div class="admin-feedback-filters">
             <select v-model="state.adminFeedbackFilters.sentiment" @change="applyFilters">
               <option value="">全部情感</option>

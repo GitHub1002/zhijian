@@ -676,7 +676,11 @@ body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
 .feedback-actions > button:hover { border-color: var(--ink); }
 .feedback-actions .feedback-cancel { color: var(--ink-3); border-color: var(--line-2); }
 
-.feedback-admin-modal { width: min(1120px, 96vw); }
+.modal.feedback-admin-modal {
+  width: min(1120px, 96vw);
+  max-width: min(1120px, 96vw);
+  height: min(88dvh, 900px);
+}
 .admin-feedback-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .admin-feedback-filters select,
 .admin-feedback-triage select {
@@ -737,6 +741,7 @@ body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
 .admin-analytics-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .admin-analytics-table th { text-align: left; font-weight: 500; color: var(--ink-3); padding: 5px 6px; border-bottom: 1px solid var(--line); }
 .admin-analytics-table td { padding: 6px; border-bottom: 1px solid var(--line); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.admin-analytics-shell { min-height: 240px; }
 .admin-reason-list { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
 .admin-cluster-list { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
 .admin-cluster-row {
@@ -746,7 +751,7 @@ body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
 }
 .admin-cluster-row strong { font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
 .admin-cluster-row small { font-size: 11.5px; color: var(--ink-3); }
-.admin-quality-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+.admin-quality-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
 .admin-quality-tabs button {
   border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer;
   padding: 7px 12px; font-size: 13px; color: var(--ink-3);
@@ -1334,6 +1339,10 @@ body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
   .workspace-user small { display: none; }
   .modal-overlay { padding: 0; align-items: flex-end; }
   .modal { max-width: none; max-height: 92dvh; border-radius: var(--r-l) var(--r-l) 0 0; }
+  .modal.feedback-admin-modal {
+    width: 100%; max-width: none;
+    height: 92dvh; max-height: 92dvh;
+  }
 }
 
 /* ---------- 26. 偏好与降级 ---------- */
