@@ -46,6 +46,7 @@ export default {
       ['unjustified_refusal', '本应回答却拒答'],
       ['other', '其他'],
     ]
+    const POSITIVE_REASON_KEYS = new Set(['helpful', 'accurate', 'complete', 'well_cited'])
     const sourceMarkOptions = [
       ['wrong_citation', '引用有误'],
       ['irrelevant', '不相关'],
@@ -61,6 +62,16 @@ export default {
       if (!Array.isArray(message.feedback.reasons)) message.feedback.reasons = []
       if (!Array.isArray(message.feedback.source_marks)) message.feedback.source_marks = []
       if (typeof message.feedback.comment !== 'string') message.feedback.comment = ''
+      if (message.feedback.sentiment === 'negative') {
+        message.feedback.reasons = message.feedback.reasons.filter(
+          key => !POSITIVE_REASON_KEYS.has(key)
+        )
+      }
+      if (message.feedback.sentiment === 'positive') {
+        message.feedback.reasons = message.feedback.reasons.filter(
+          key => POSITIVE_REASON_KEYS.has(key)
+        )
+      }
       return message.feedback
     }
 
@@ -95,6 +106,11 @@ export default {
 
     async function chooseSentiment(message, sentiment) {
       const feedback = ensureFeedback(message)
+      if (feedback.sentiment !== sentiment) {
+        feedback.reasons = sentiment === 'negative'
+          ? feedback.reasons.filter(key => !POSITIVE_REASON_KEYS.has(key))
+          : []
+      }
       feedback.sentiment = sentiment
       message._hint = ''
       if (sentiment === 'positive') {

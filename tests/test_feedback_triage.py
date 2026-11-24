@@ -1,4 +1,6 @@
 """规则分流：来源级标记要能单独触发归因。"""
+import pytest
+
 from app import feedback
 
 
@@ -42,3 +44,24 @@ def test_explicit_reason_beats_trace_inference():
     )
     assert category == "doc_issue"
     assert confidence == 0.9
+
+
+def test_negative_drops_positive_reason():
+    result = feedback.normalize(
+        {"sentiment": "negative", "reasons": ["helpful", "wrong_info"]}, []
+    )
+    assert result["reasons"] == ["wrong_info"]
+
+
+def test_positive_drops_negative_reason():
+    result = feedback.normalize(
+        {"sentiment": "positive", "reasons": ["wrong_info"]}, []
+    )
+    assert result["reasons"] == ["helpful"]
+
+
+def test_unknown_reason_is_still_rejected():
+    with pytest.raises(ValueError):
+        feedback.normalize(
+            {"sentiment": "negative", "reasons": ["not-a-reason"]}, []
+        )

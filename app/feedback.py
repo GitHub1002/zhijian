@@ -48,9 +48,16 @@ def normalize(payload, sources):
         raise ValueError("sentiment 与 rating 不一致")
 
     reasons = [str(item) for item in (payload.get("reasons") or []) if str(item)]
-    unknown = [item for item in reasons if item not in FEEDBACK_REASONS]
+    allowed = set(FEEDBACK_REASONS) | POSITIVE_REASONS
+    unknown = [item for item in reasons if item not in allowed]
     if unknown:
         raise ValueError(f"未知反馈原因：{', '.join(unknown)}")
+    # 点赞和点踩的原因集合不同。切换到另一侧时丢掉不属于当前情感的原因，
+    # 避免把旧的 helpful 带进点踩，或把点踩原因写进点赞。
+    if sentiment == "negative":
+        reasons = [item for item in reasons if item in FEEDBACK_REASONS]
+    else:
+        reasons = [item for item in reasons if item in POSITIVE_REASONS]
 
     comment = (payload.get("comment") or payload.get("reason") or "").strip()
     # 兼容旧前端：只传 rating + 自由文本原因时，把原因归到“其他”。
