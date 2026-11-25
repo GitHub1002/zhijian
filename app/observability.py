@@ -31,6 +31,9 @@ async def middleware(request, call_next):
         response = await call_next(request)
         status = response.status_code
         response.headers["X-Request-ID"] = request_id
+        if request.url.path.startswith("/static/"):
+            # 本地应用没有构建版本号，强制浏览器每次回源校验，避免旧 JS 卡住页面。
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
     finally:
         elapsed_ms = int((time.perf_counter() - started) * 1000)

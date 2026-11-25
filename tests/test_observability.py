@@ -28,6 +28,13 @@ def test_request_id_is_echoed(client):
     assert response.headers["X-Request-ID"] == "trace-123"
 
 
+def test_static_assets_are_revalidated(client):
+    response = client.get("/static/style.css")
+
+    assert response.status_code == 200
+    assert "no-cache" in response.headers["cache-control"]
+
+
 def test_access_log_has_no_query_or_body(client, caplog):
     caplog.set_level(logging.INFO, logger="app.request")
 
