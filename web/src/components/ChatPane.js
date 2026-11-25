@@ -62,21 +62,27 @@ export default {
       if (!Array.isArray(message.feedback.reasons)) message.feedback.reasons = []
       if (!Array.isArray(message.feedback.source_marks)) message.feedback.source_marks = []
       if (typeof message.feedback.comment !== 'string') message.feedback.comment = ''
-      if (message.feedback.sentiment === 'negative') {
-        message.feedback.reasons = message.feedback.reasons.filter(
-          key => !POSITIVE_REASON_KEYS.has(key)
-        )
-      }
-      if (message.feedback.sentiment === 'positive') {
-        message.feedback.reasons = message.feedback.reasons.filter(
-          key => POSITIVE_REASON_KEYS.has(key)
-        )
-      }
       return message.feedback
     }
 
+    // 只在事件处理里调用，不能放进模板渲染路径：赋值新数组会触发无限重渲染。
+    function sanitizeFeedback(feedback) {
+      if (!feedback) return feedback
+      if (!Array.isArray(feedback.reasons)) feedback.reasons = []
+      if (feedback.sentiment === 'negative') {
+        feedback.reasons = feedback.reasons.filter(key => !POSITIVE_REASON_KEYS.has(key))
+      }
+      if (feedback.sentiment === 'positive') {
+        feedback.reasons = feedback.reasons.filter(key => POSITIVE_REASON_KEYS.has(key))
+      }
+      return feedback
+    }
+
     function hasReason(message, key) {
-      return ensureFeedback(message).reasons.includes(key)
+      const reasons = message.feedback && Array.isArray(message.feedback.reasons)
+        ? message.feedback.reasons
+        : []
+      return reasons.includes(key)
     }
 
     function toggleReason(message, key) {
@@ -87,9 +93,10 @@ export default {
     }
 
     function hasSourceMark(message, index, mark) {
-      return ensureFeedback(message).source_marks.some(
-        item => item.source_index === index && item.mark === mark
-      )
+      const marks = message.feedback && Array.isArray(message.feedback.source_marks)
+        ? message.feedback.source_marks
+        : []
+      return marks.some(item => item.source_index === index && item.mark === mark)
     }
 
     function toggleSourceMark(message, index, mark) {
@@ -137,6 +144,9 @@ export default {
         message._hint = '选择“其他”时请补充至少 10 个字符'
         return
       }
+      feedback.reasons = feedback.sentiment === 'negative'
+        ? feedback.reasons.filter(key => !POSITIVE_REASON_KEYS.has(key))
+        : feedback.reasons.filter(key => POSITIVE_REASON_KEYS.has(key))
       const payload = {
         sentiment: feedback.sentiment,
         reasons: feedback.reasons,
@@ -153,7 +163,7 @@ export default {
         if (error.message.includes('已经评价过')) {
           try {
             const existing = await loadFeedbackForAnswer(message.answerId)
-            if (existing) message.feedback = existing
+            if (existing) message.feedback = sanitizeFeedback(existing)
             message._hint = '已加载之前的反馈，可以直接修改'
           } catch {
             message._hint = error.message
@@ -171,7 +181,7 @@ export default {
       message._hint = ''
       try {
         const existing = await loadFeedbackForAnswer(message.answerId)
-        if (existing) message.feedback = existing
+        if (existing) message.feedback = sanitizeFeedback(existing)
       } catch {
         // 保留当前内存里的反馈，用户仍可重新提交
       }
