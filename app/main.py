@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import analytics, audit, config, content, content_store, curated_store, db, documents, experiments, feedback as feedback_rules, ingest, llm, md_render, observability, rag, tracing
+from . import analytics, audit, config, content, content_store, curated_store, db, documents, eval_store, experiments, feedback as feedback_rules, ingest, llm, md_render, observability, rag, tracing
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,7 @@ class ContentTaskFromFeedbackRequest(BaseModel):
 class CuratedExampleUpdateRequest(BaseModel):
     status: Optional[Literal["candidate", "approved", "rejected"]] = None
     use_as_few_shot: Optional[bool] = None
+    eval_passed: Optional[bool] = None
 
 
 class ExperimentVariantRequest(BaseModel):
@@ -642,13 +643,18 @@ def admin_update_curated_example(
         example_id,
         status=req.status,
         use_as_few_shot=req.use_as_few_shot,
+        eval_passed=req.eval_passed,
         reviewed_by=admin["id"],
     )
     if not example:
         raise HTTPException(status_code=404, detail="精选正例不存在")
     audit.log(
         admin["id"], "curated.update", "curated_example", example_id,
-        {"status": req.status, "use_as_few_shot": req.use_as_few_shot},
+        {
+            "status": req.status,
+            "use_as_few_shot": req.use_as_few_shot,
+            "eval_passed": req.eval_passed,
+        },
     )
     return {"ok": True, "example": example}
 
@@ -717,6 +723,19 @@ def admin_experiment_results(
     if not item:
         raise HTTPException(status_code=404, detail="实验不存在")
     return item
+
+
+@app.get("/api/admin/eval/runs")
+def admin_eval_runs(page: int = 1, page_size: int = 20, _admin=Depends(admin_user)):
+    return eval_store.list_runs(page=page, page_size=page_size)
+
+
+@app.get("/api/admin/eval/runs/{run_id}")
+def admin_eval_run_detail(run_id: int, _admin=Depends(admin_user)):
+    item = eval_store.get_run(run_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="评测记录不存在")
+    return {"run": item}
 
 
 @app.get("/api/admin/audit-log")

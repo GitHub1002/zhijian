@@ -9,6 +9,8 @@ import {
   loadAdminCuratedExamples,
   loadAdminExperiments,
   loadExperimentResults,
+  loadAdminEvalRuns,
+  loadAdminEvalRun,
   createExperiment,
   updateExperiment,
   updateCuratedExample,
@@ -121,6 +123,7 @@ export default {
       if (state.adminQualityTab === 'tasks') loadAdminContentTasks(1)
       if (state.adminQualityTab === 'curated') loadAdminCuratedExamples(1)
       if (state.adminQualityTab === 'experiments') loadAdminExperiments()
+      if (state.adminQualityTab === 'eval') loadAdminEvalRuns(1)
     }
 
     function switchTab(tab) {
@@ -139,7 +142,20 @@ export default {
       updateCuratedExample(example.id, {
         status: example.status,
         use_as_few_shot: example.use_as_few_shot,
+        eval_passed: example.eval_passed,
       })
+    }
+
+    function loadEvals(page) {
+      loadAdminEvalRuns(page)
+    }
+
+    function showEvalRun(runId) {
+      loadAdminEvalRun(runId)
+    }
+
+    function datasetName(path) {
+      return String(path || '').split(/[\\/]/).pop() || path || ''
     }
 
     function toggleExperimentForm() {
@@ -256,6 +272,9 @@ export default {
       saveTask,
       loadCurated,
       saveCurated,
+      loadEvals,
+      showEvalRun,
+      datasetName,
       experimentForm,
       toggleExperimentForm,
       createExperimentFromForm,
@@ -291,6 +310,7 @@ export default {
             <button type="button" :class="{ active: state.adminQualityTab === 'tasks' }" @click="switchTab('tasks')">内容任务<span v-if="state.adminContentTaskTotal"> · {{ state.adminContentTaskTotal }}</span></button>
             <button type="button" :class="{ active: state.adminQualityTab === 'curated' }" @click="switchTab('curated')">精选正例<span v-if="state.adminCuratedTotal"> · {{ state.adminCuratedTotal }}</span></button>
             <button type="button" :class="{ active: state.adminQualityTab === 'experiments' }" @click="switchTab('experiments')">实验<span v-if="state.adminExperiments.length"> · {{ state.adminExperiments.length }}</span></button>
+            <button type="button" :class="{ active: state.adminQualityTab === 'eval' }" @click="switchTab('eval')">评测<span v-if="state.adminEvalTotal"> · {{ state.adminEvalTotal }}</span></button>
           </div>
           <div v-if="state.adminQualityTab === 'overview'">
           <p class="admin-copy">近 30 天的回答、拒答、反馈和引用点击概览。数据按 UTC 时间窗口聚合。</p>
@@ -464,7 +484,7 @@ export default {
             </div>
           </div>
           <div v-else-if="state.adminQualityTab === 'curated'" class="admin-curated">
-            <p class="admin-copy">点赞回答会进入候选池。只有状态“已通过”且勾选“用于 few-shot”，同时服务端 CURATED_FEWSHOT_ENABLED=1 时，示例才会进入提示词；示例不作为事实来源。</p>
+            <p class="admin-copy">点赞回答会进入候选池。只有状态“已通过”、勾选“评测通过”和“用于 few-shot”，同时服务端 CURATED_FEWSHOT_ENABLED=1 时，示例才会进入提示词；示例不作为事实来源。</p>
             <div class="admin-feedback-filters">
               <select v-model="state.adminCuratedFilters.status" @change="loadCurated(1)">
                 <option value="">全部状态</option>
@@ -486,6 +506,10 @@ export default {
                     <option v-for="option in curatedStatusOptions" :key="option[0]" :value="option[0]">{{ option[1] }}</option>
                   </select>
                   <label class="admin-curated-toggle">
+                    <input type="checkbox" v-model="item.eval_passed" @change="saveCurated(item)" />
+                    评测通过
+                  </label>
+                  <label class="admin-curated-toggle">
                     <input type="checkbox" v-model="item.use_as_few_shot" @change="saveCurated(item)" />
                     用于 few-shot
                   </label>
@@ -498,7 +522,7 @@ export default {
               <button type="button" :disabled="state.adminCuratedPage >= state.adminCuratedPages" @click="loadCurated(state.adminCuratedPage + 1)">下一页</button>
             </div>
           </div>
-          <div v-else class="admin-experiments">
+          <div v-else-if="state.adminQualityTab === 'experiments'" class="admin-experiments">
             <p class="admin-copy">实验默认关闭。服务端 EXPERIMENTS_ENABLED=1 时才会按用户分桶；这里只能覆盖检索参数，可随时暂停或因护栏暂停。</p>
             <div class="admin-feedback-filters">
               <button class="toolbar-btn" type="button" @click="toggleExperimentForm">新建实验</button>
@@ -545,6 +569,44 @@ export default {
                     <td>{{ rate(item.negative_rate) }}</td>
                     <td>{{ item.p95_latency_ms ?? '—' }}</td>
                     <td>{{ item.guardrail_breached ? item.guardrail_flags.join('；') : '正常' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div v-else class="admin-eval">
+            <p class="admin-copy">评测记录来自 run_retrieval_eval --save。这里只读展示，不在线跑模型。</p>
+            <div class="admin-feedback-filters">
+              <button class="toolbar-btn" type="button" @click="loadEvals(1)">刷新</button>
+            </div>
+            <div v-if="state.adminEvalState" class="admin-users-state">{{ state.adminEvalState }}</div>
+            <div class="admin-task-list">
+              <div v-if="!state.adminEvalRuns.length" class="admin-empty">还没有评测记录。运行评测时加 --save。</div>
+              <div v-for="run in state.adminEvalRuns" :key="run.id" class="admin-task-row admin-eval-row">
+                <div class="admin-task-main">
+                  <strong>#{{ run.id }} {{ run.name }} · {{ datasetName(run.dataset) }}</strong>
+                  <small>{{ formatTime(run.created_at) }} · hit@5={{ run.aggregate['hit@5'] ?? '—' }} · false_answer={{ run.aggregate.false_answer_rate ?? '—' }}</small>
+                </div>
+                <button class="toolbar-btn" type="button" @click="showEvalRun(run.id)">详情</button>
+              </div>
+            </div>
+            <div class="admin-feedback-pagination">
+              <button type="button" :disabled="state.adminEvalPage <= 1" @click="loadEvals(state.adminEvalPage - 1)">上一页</button>
+              <span>第 {{ state.adminEvalPage }} / {{ state.adminEvalPages }} 页 · 共 {{ state.adminEvalTotal }} 条</span>
+              <button type="button" :disabled="state.adminEvalPage >= state.adminEvalPages" @click="loadEvals(state.adminEvalPage + 1)">下一页</button>
+            </div>
+            <div v-if="state.adminEvalDetailState" class="admin-users-state">{{ state.adminEvalDetailState }}</div>
+            <div v-else-if="state.adminEvalDetail" class="admin-eval-detail">
+              <div class="admin-section-title">评测详情 · {{ state.adminEvalDetail.name }}</div>
+              <table class="admin-analytics-table">
+                <thead><tr><th>case</th><th>可回答</th><th>grounded</th><th>hit@5</th><th>错误</th></tr></thead>
+                <tbody>
+                  <tr v-for="item in state.adminEvalDetail.results" :key="item.id">
+                    <td>{{ item.case_id }}</td>
+                    <td>{{ item.answerable ? '是' : '否' }}</td>
+                    <td>{{ item.grounded === null ? '—' : (item.grounded ? '是' : '否') }}</td>
+                    <td>{{ item.metrics['hit@5'] ?? '—' }}</td>
+                    <td>{{ item.error || '' }}</td>
                   </tr>
                 </tbody>
               </table>

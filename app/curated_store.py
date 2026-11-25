@@ -21,6 +21,7 @@ def _example_dict(row):
     item = dict(row)
     item["sources"] = _load_json(item.pop("sources_json", "[]"), [])
     item["use_as_few_shot"] = bool(item.get("use_as_few_shot"))
+    item["eval_passed"] = bool(item.get("eval_passed"))
     return item
 
 
@@ -84,7 +85,8 @@ def invalidate_candidate(answer_id):
     with db.connect() as conn:
         conn.execute(
             """UPDATE curated_examples
-               SET status = 'rejected', use_as_few_shot = 0, updated_at = ?
+               SET status = 'rejected', use_as_few_shot = 0,
+                   eval_passed = 0, updated_at = ?
                WHERE answer_id = ?""",
             (db.now(), answer_id),
         )
@@ -128,7 +130,8 @@ def get_example(example_id):
         return _fetch(conn, example_id)
 
 
-def update_example(example_id, *, status=None, use_as_few_shot=None, reviewed_by=None):
+def update_example(example_id, *, status=None, use_as_few_shot=None,
+                   eval_passed=None, reviewed_by=None):
     updates = {}
     if status is not None:
         updates["status"] = status
@@ -136,6 +139,8 @@ def update_example(example_id, *, status=None, use_as_few_shot=None, reviewed_by
         updates["reviewed_at"] = db.now()
     if use_as_few_shot is not None:
         updates["use_as_few_shot"] = 1 if use_as_few_shot else 0
+    if eval_passed is not None:
+        updates["eval_passed"] = 1 if eval_passed else 0
     if not updates:
         return get_example(example_id)
     updates["updated_at"] = db.now()
@@ -162,6 +167,7 @@ def approved_examples(limit=3, libraries=None):
         rows = conn.execute(
             f"""SELECT question, answer, library FROM curated_examples
                 WHERE status = 'approved' AND use_as_few_shot = 1
+                  AND eval_passed = 1
                   AND library IN ({placeholders})
                 ORDER BY updated_at DESC, id DESC
                 LIMIT ?""",

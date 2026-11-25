@@ -53,6 +53,14 @@ def main():
     parser.add_argument("--db-path")
     parser.add_argument("--qdrant-path")
     parser.add_argument(
+        "--save", action="store_true", help="把本次评测写入 eval_runs / eval_results"
+    )
+    parser.add_argument(
+        "--results-db",
+        default=str(ROOT / "data" / "knowledge.db"),
+        help="评测结果写入的 SQLite 库；默认主库",
+    )
+    parser.add_argument(
         "--match", choices=["source_heading", "chunk_id"], default="source_heading"
     )
     parser.add_argument("--limit", type=int)
@@ -110,6 +118,12 @@ def main():
     write_json(out, payload)
     print_summary(summary, f"RETRIEVAL EVAL · {args.name}")
     print(f"\n  report: {out}")
+
+    if args.save:
+        from app import eval_store  # noqa: E402
+
+        run_id = eval_store.save_payload(payload, args.results_db)
+        print(f"  eval run id: {run_id} ({args.results_db})")
 
     if not args.dry_run:
         try:

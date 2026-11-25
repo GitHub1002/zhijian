@@ -79,6 +79,11 @@ python evals/run_sweep.py \
 python evals/check_thresholds.py \
   --baseline evals/configs/baseline_seed_v2.json \
   --candidate data/eval/latest.json
+
+# 把本次评测写入管理端「评测」页
+python evals/run_retrieval_eval.py \
+  --dataset evals/datasets/seed_v2.jsonl --k 3,5,12 --name seed_v2 \
+  --save --results-db data/knowledge.db
 ```
 
 ## 指标口径

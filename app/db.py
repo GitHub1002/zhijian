@@ -258,6 +258,7 @@ def init_db():
                 library TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'candidate',
                 use_as_few_shot INTEGER NOT NULL DEFAULT 0,
+                eval_passed INTEGER NOT NULL DEFAULT 0,
                 reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 reviewed_at TEXT,
                 created_at TEXT NOT NULL,
@@ -267,6 +268,31 @@ def init_db():
                 ON curated_examples(status, use_as_few_shot, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_curated_library
                 ON curated_examples(library);
+            CREATE TABLE IF NOT EXISTS eval_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_key TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL DEFAULT '',
+                dataset TEXT NOT NULL DEFAULT '',
+                config_json TEXT NOT NULL DEFAULT '{}',
+                aggregate_json TEXT NOT NULL DEFAULT '{}',
+                passed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_eval_runs_created
+                ON eval_runs(created_at DESC);
+            CREATE TABLE IF NOT EXISTS eval_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
+                case_id TEXT NOT NULL,
+                answerable INTEGER NOT NULL DEFAULT 1,
+                grounded INTEGER,
+                metrics_json TEXT NOT NULL DEFAULT '{}',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                UNIQUE(run_id, case_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_eval_results_run
+                ON eval_results(run_id);
             CREATE TABLE IF NOT EXISTS experiments (
                 key TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -478,9 +504,10 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback(sentiment, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
-        conn.execute("PRAGMA user_version = 8")
+        _add_column(conn, "curated_examples", "eval_passed", "INTEGER NOT NULL DEFAULT 0")
+        conn.execute("PRAGMA user_version = 9")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '8', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '9', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )

@@ -69,6 +69,13 @@ export const state = reactive({
   adminExperimentState: '',
   adminExperimentResults: null,
   adminExperimentResultsState: '',
+  adminEvalRuns: [],
+  adminEvalPage: 1,
+  adminEvalPages: 1,
+  adminEvalTotal: 0,
+  adminEvalState: '',
+  adminEvalDetail: null,
+  adminEvalDetailState: '',
   permissionOpen: false,
   permissions: [],
   permissionState: '',
@@ -546,8 +553,38 @@ export async function openAdminFeedback() {
         ? loadAdminCuratedExamples(1)
         : state.adminQualityTab === 'experiments'
           ? loadAdminExperiments()
-          : Promise.resolve(),
+          : state.adminQualityTab === 'eval'
+            ? loadAdminEvalRuns(1)
+            : Promise.resolve(),
   ])
+}
+
+export async function loadAdminEvalRuns(page = 1) {
+  state.adminEvalState = '正在加载评测记录…'
+  try {
+    const data = await api(
+      `/api/admin/eval/runs?page=${encodeURIComponent(page)}&page_size=20`
+    )
+    state.adminEvalRuns = data.items || []
+    state.adminEvalPage = data.page || 1
+    state.adminEvalPages = data.pages || 1
+    state.adminEvalTotal = data.total || 0
+    state.adminEvalState = ''
+  } catch (error) {
+    state.adminEvalState = error.message
+  }
+}
+
+export async function loadAdminEvalRun(runId) {
+  state.adminEvalDetail = null
+  state.adminEvalDetailState = '正在加载评测详情…'
+  try {
+    const data = await api(`/api/admin/eval/runs/${encodeURIComponent(runId)}`)
+    state.adminEvalDetail = data.run || null
+    state.adminEvalDetailState = ''
+  } catch (error) {
+    state.adminEvalDetailState = error.message
+  }
 }
 
 export async function loadAdminExperiments() {

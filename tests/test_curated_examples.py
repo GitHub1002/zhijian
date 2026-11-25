@@ -37,7 +37,11 @@ def _candidate(database):
 def _approved_example(database):
     user, answer_id, candidate = _candidate(database)
     curated_store.update_example(
-        candidate["id"], status="approved", use_as_few_shot=True, reviewed_by=user["id"]
+        candidate["id"],
+        status="approved",
+        use_as_few_shot=True,
+        eval_passed=True,
+        reviewed_by=user["id"],
     )
     return user, answer_id, candidate
 
@@ -53,6 +57,7 @@ def test_positive_feedback_creates_candidate(temp_db):
     assert item["library"] == "hr"
     assert item["status"] == "candidate"
     assert item["use_as_few_shot"] is False
+    assert item["eval_passed"] is False
 
 
 def test_approved_examples_respect_library_permission(temp_db):
@@ -71,6 +76,19 @@ def test_negative_feedback_revokes_candidate(temp_db):
 
     assert item["status"] == "rejected"
     assert item["use_as_few_shot"] is False
+    assert item["eval_passed"] is False
+    assert curated_store.approved_examples(3, ["hr"]) == []
+
+
+def test_approved_without_eval_is_not_used(temp_db):
+    user, _, candidate = _candidate(temp_db)
+    curated_store.update_example(
+        candidate["id"],
+        status="approved",
+        use_as_few_shot=True,
+        reviewed_by=user["id"],
+    )
+
     assert curated_store.approved_examples(3, ["hr"]) == []
 
 
