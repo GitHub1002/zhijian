@@ -6,7 +6,8 @@
 
 ```text
 evals/
-  datasets/seed_v1.jsonl      # 人工 golden set
+  datasets/seed_v1.jsonl      # 已冻结的 55 条基线
+  datasets/seed_v2.jsonl      # 当前 60 条（补到 10 条不可回答）
   configs/thresholds.json     # 回归门槛
   lib/metrics.py              # Hit@k / Recall@k / Precision@k / MRR / NDCG / AP
   lib/dataset.py              # JSONL/JSON 加载与校验
@@ -42,40 +43,41 @@ evals/
 
 - `expected_sources` 用 `source + heading`，因为重新切分后 `chunk_id` 会变。
 - `answerable=false` 的样本要求系统拒答，用于统计 `correct_refusal_rate` 和 `false_answer_rate`。
-- 当前 `seed_v1` 有 55 条：覆盖 6 个库、md/docx/pdf/txt、5 条不可回答样本。
+- `seed_v1` 有 55 条（5 条不可回答），已冻结，只用于历史对比。
+- 当前使用 `seed_v2`：60 条，覆盖 6 个库、md/docx/pdf/txt，含 10 条不可回答样本。
 
 ## 常用命令
 
 ```bash
 # 只验证 harness，不加载模型
-python evals/run_retrieval_eval.py --dataset evals/datasets/seed_v1.jsonl --dry-run
+python evals/run_retrieval_eval.py --dataset evals/datasets/seed_v2.jsonl --dry-run
 
 # 真实检索评测
 python evals/run_retrieval_eval.py \
-  --dataset evals/datasets/seed_v1.jsonl --k 3,5,12 --name baseline
+  --dataset evals/datasets/seed_v2.jsonl --k 3,5,12 --name seed_v2
 
 # 改参数后对比基线
 python evals/run_retrieval_eval.py \
-  --dataset evals/datasets/seed_v1.jsonl --k 5 \
-  --config '{"RRF_K": 40}' --compare evals/configs/baseline_rerank_gate.json
+  --dataset evals/datasets/seed_v2.jsonl --k 5 \
+  --config '{"RRF_K": 40}' --compare evals/configs/baseline_seed_v2.json
 
 # 回答质量：默认用现有 DeepSeek 做 LLM Judge
 python evals/run_ragas_eval.py \
-  --dataset evals/datasets/seed_v1.jsonl --limit 20
+  --dataset evals/datasets/seed_v2.jsonl --limit 20
 
 # 安装 RAGAS 后可用
 pip install -r evals/requirements-eval.txt
 python evals/run_ragas_eval.py \
-  --dataset evals/datasets/seed_v1.jsonl --limit 20 --provider ragas
+  --dataset evals/datasets/seed_v2.jsonl --limit 20 --provider ragas
 
 # 参数扫描：同一组检索参数只跑一次，门槛在缓存结果上复用
 python evals/run_sweep.py \
-  --dataset evals/datasets/seed_v1.jsonl --limit 25 --include-hard-negatives
+  --dataset evals/datasets/seed_v2.jsonl --limit 25 --include-hard-negatives
 # 输出 data/eval/sweep.json 和 data/eval/sweep.csv（已 gitignore）
 
 # 阈值门禁
 python evals/check_thresholds.py \
-  --baseline evals/configs/baseline_rerank_gate.json \
+  --baseline evals/configs/baseline_seed_v2.json \
   --candidate data/eval/latest.json
 ```
 
@@ -103,7 +105,7 @@ RAG 指标（LLM Judge / RAGAS）：`faithfulness`、`answer_relevancy`、`conte
 python evals/run_retrieval_eval.py \
   --dataset evals/datasets/seed_v1.jsonl --k 5 \
   --config '{"MIN_RERANK_SCORE": 0.5}' \
-  --compare evals/configs/baseline_rerank_gate.json
+  --compare evals/configs/baseline_seed_v2.json
 ```
 
 ### 参数扫描结论（seed_v1，2026-11-22）
@@ -117,7 +119,7 @@ python evals/run_retrieval_eval.py \
 - 真实评测建议先用 `python evals/prepare_eval_env.py` 复制一份 `data/eval/snapshot-.../`，再用 `--db-path` / `--qdrant-path` 指向快照。
 - 首次真实运行会加载嵌入和重排模型；如果本机没有缓存，会触发下载。
 - `--dry-run` 不导入 `app`，用于 CI 或快速检查脚本是否可用。
-- `configs/baseline_vector.json` 是加证据门槛之前的基线，保留用于前后对比；当前基线是 `configs/baseline_rerank_gate.json`。
+- `configs/baseline_vector.json` 是加证据门槛之前的基线；`configs/baseline_rerank_gate.json` 是 seed_v1 基线；当前基线是 `configs/baseline_seed_v2.json`。
 - `configs/thresholds.json` 已启用 `false_answer_rate` / `correct_refusal_rate` 硬门禁，回归时 `check_thresholds.py` 退出码非 0。
 
 ## 标注流程
