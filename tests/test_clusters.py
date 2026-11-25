@@ -44,3 +44,14 @@ def test_negative_feedback_becomes_clusters(temp_db):
 
 def test_clusters_empty_without_negative_feedback(temp_db):
     assert analytics.clusters(30) == []
+
+
+def test_cluster_tokens_are_bounded():
+    rows = [
+        {"id": index, "question": f"问题 {index}", "reasons": []}
+        for index in range(500)
+    ]
+    clusters = analytics._cluster_rows(rows)
+
+    assert clusters
+    assert all(len(cluster["tokens"]) <= analytics.MAX_CLUSTER_TOKENS for cluster in clusters)

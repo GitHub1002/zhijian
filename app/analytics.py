@@ -13,6 +13,8 @@ from . import db
 DEFAULT_DAYS = 30
 MAX_DAYS = 365
 CLUSTER_THRESHOLD = 0.3
+MAX_CLUSTER_ROWS = 2000
+MAX_CLUSTER_TOKENS = 64
 
 
 def _days(value):
@@ -256,7 +258,12 @@ def _cluster_rows(rows, threshold=CLUSTER_THRESHOLD):
                 best = cluster
                 best_score = score
         if best is not None and best_score >= threshold:
-            best["tokens"] |= tokens
+            best["token_counts"].update(tokens)
+            # 只保留最常见的 token 作为簇代表，避免长尾问题把集合撑大。
+            best["tokens"] = {
+                token
+                for token, _ in best["token_counts"].most_common(MAX_CLUSTER_TOKENS)
+            }
             best["questions"].append(row.get("question", ""))
             best["reasons"].update(row.get("reasons") or [])
             best["ids"].append(row.get("id"))
@@ -264,6 +271,7 @@ def _cluster_rows(rows, threshold=CLUSTER_THRESHOLD):
             clusters.append(
                 {
                     "tokens": set(tokens),
+                    "token_counts": Counter(tokens),
                     "questions": [row.get("question", "")],
                     "reasons": Counter(row.get("reasons") or []),
                     "ids": [row.get("id")],
@@ -279,8 +287,9 @@ def clusters(days=DEFAULT_DAYS, limit=20):
             """SELECT f.id, a.question, f.reasons_json
                FROM feedback f
                LEFT JOIN answers a ON a.id = f.answer_id
-               WHERE f.sentiment = 'negative' AND f.created_at >= ?""",
-            (since,),
+               WHERE f.sentiment = 'negative' AND f.created_at >= ?
+               ORDER BY f.created_at DESC, f.id DESC LIMIT ?""",
+            (since, MAX_CLUSTER_ROWS),
         ).fetchall()
     parsed = []
     for row in rows:
