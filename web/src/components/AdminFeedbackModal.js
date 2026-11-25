@@ -11,6 +11,7 @@ import {
   loadExperimentResults,
   loadAdminEvalRuns,
   loadAdminEvalRun,
+  loadAdminAudit,
   createExperiment,
   updateExperiment,
   updateCuratedExample,
@@ -124,6 +125,7 @@ export default {
       if (state.adminQualityTab === 'curated') loadAdminCuratedExamples(1)
       if (state.adminQualityTab === 'experiments') loadAdminExperiments()
       if (state.adminQualityTab === 'eval') loadAdminEvalRuns(1)
+      if (state.adminQualityTab === 'audit') loadAdminAudit(1)
     }
 
     function switchTab(tab) {
@@ -156,6 +158,18 @@ export default {
 
     function datasetName(path) {
       return String(path || '').split(/[\\/]/).pop() || path || ''
+    }
+
+    function loadAudits(page) {
+      loadAdminAudit(page)
+    }
+
+    function formatDetail(detail) {
+      try {
+        return JSON.stringify(detail || {})
+      } catch (error) {
+        return ''
+      }
     }
 
     function toggleExperimentForm() {
@@ -275,6 +289,8 @@ export default {
       loadEvals,
       showEvalRun,
       datasetName,
+      loadAudits,
+      formatDetail,
       experimentForm,
       toggleExperimentForm,
       createExperimentFromForm,
@@ -311,6 +327,7 @@ export default {
             <button type="button" :class="{ active: state.adminQualityTab === 'curated' }" @click="switchTab('curated')">精选正例<span v-if="state.adminCuratedTotal"> · {{ state.adminCuratedTotal }}</span></button>
             <button type="button" :class="{ active: state.adminQualityTab === 'experiments' }" @click="switchTab('experiments')">实验<span v-if="state.adminExperiments.length"> · {{ state.adminExperiments.length }}</span></button>
             <button type="button" :class="{ active: state.adminQualityTab === 'eval' }" @click="switchTab('eval')">评测<span v-if="state.adminEvalTotal"> · {{ state.adminEvalTotal }}</span></button>
+            <button type="button" :class="{ active: state.adminQualityTab === 'audit' }" @click="switchTab('audit')">审计<span v-if="state.adminAuditTotal"> · {{ state.adminAuditTotal }}</span></button>
           </div>
           <div v-if="state.adminQualityTab === 'overview'">
           <p class="admin-copy">近 30 天的回答、拒答、反馈和引用点击概览。数据按 UTC 时间窗口聚合。</p>
@@ -574,7 +591,7 @@ export default {
               </table>
             </div>
           </div>
-          <div v-else class="admin-eval">
+          <div v-else-if="state.adminQualityTab === 'eval'" class="admin-eval">
             <p class="admin-copy">评测记录来自 run_retrieval_eval --save。这里只读展示，不在线跑模型。</p>
             <div class="admin-feedback-filters">
               <button class="toolbar-btn" type="button" @click="loadEvals(1)">刷新</button>
@@ -610,6 +627,28 @@ export default {
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+          <div v-else class="admin-audit">
+            <p class="admin-copy">管理端操作审计：记录谁在什么时候改了什么，不保存问题、回答或评论正文。</p>
+            <div class="admin-feedback-filters">
+              <button class="toolbar-btn" type="button" @click="loadAudits(1)">刷新</button>
+            </div>
+            <div v-if="state.adminAuditState" class="admin-users-state">{{ state.adminAuditState }}</div>
+            <div class="admin-task-list">
+              <div v-if="!state.adminAuditEvents.length" class="admin-empty">还没有审计记录。</div>
+              <div v-for="event in state.adminAuditEvents" :key="event.id" class="admin-task-row admin-audit-row">
+                <div class="admin-task-main">
+                  <strong>{{ event.action }} · {{ event.target_type }} {{ event.target_id }}</strong>
+                  <small>{{ formatTime(event.created_at) }} · {{ event.actor_name || '系统' }}</small>
+                  <pre class="admin-curated-answer">{{ formatDetail(event.detail) }}</pre>
+                </div>
+              </div>
+            </div>
+            <div class="admin-feedback-pagination">
+              <button type="button" :disabled="state.adminAuditPage <= 1" @click="loadAudits(state.adminAuditPage - 1)">上一页</button>
+              <span>第 {{ state.adminAuditPage }} / {{ state.adminAuditPages }} 页 · 共 {{ state.adminAuditTotal }} 条</span>
+              <button type="button" :disabled="state.adminAuditPage >= state.adminAuditPages" @click="loadAudits(state.adminAuditPage + 1)">下一页</button>
             </div>
           </div>
         </div>

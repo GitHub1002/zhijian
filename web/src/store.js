@@ -76,6 +76,11 @@ export const state = reactive({
   adminEvalState: '',
   adminEvalDetail: null,
   adminEvalDetailState: '',
+  adminAuditEvents: [],
+  adminAuditPage: 1,
+  adminAuditPages: 1,
+  adminAuditTotal: 0,
+  adminAuditState: '',
   permissionOpen: false,
   permissions: [],
   permissionState: '',
@@ -555,8 +560,26 @@ export async function openAdminFeedback() {
           ? loadAdminExperiments()
           : state.adminQualityTab === 'eval'
             ? loadAdminEvalRuns(1)
-            : Promise.resolve(),
+            : state.adminQualityTab === 'audit'
+              ? loadAdminAudit(1)
+              : Promise.resolve(),
   ])
+}
+
+export async function loadAdminAudit(page = 1) {
+  state.adminAuditState = '正在加载审计记录…'
+  try {
+    const data = await api(
+      `/api/admin/audit-log?page=${encodeURIComponent(page)}&page_size=20`
+    )
+    state.adminAuditEvents = data.items || []
+    state.adminAuditPage = data.page || 1
+    state.adminAuditPages = data.pages || 1
+    state.adminAuditTotal = data.total || 0
+    state.adminAuditState = ''
+  } catch (error) {
+    state.adminAuditState = error.message
+  }
 }
 
 export async function loadAdminEvalRuns(page = 1) {
