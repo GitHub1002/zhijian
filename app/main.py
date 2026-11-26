@@ -410,6 +410,21 @@ FEEDBACK_CSV_COLUMNS = (
 )
 
 
+_PII_PATTERNS = (
+    (re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)"), "[id]"),
+    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "[phone]"),
+    (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "[email]"),
+)
+_CSV_PII_KEYS = {"question", "answer", "comment", "corrected_answer", "triage_note"}
+
+
+def _redact_pii(value):
+    text = "" if value is None else str(value)
+    for pattern, replacement in _PII_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def _csv_cell(value):
     if value is None:
         return ""
@@ -430,6 +445,7 @@ def admin_feedback_export(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     q: Optional[str] = None,
+    redact_pii: bool = True,
     _admin=Depends(admin_user),
 ):
     rows = db.export_feedback(
@@ -446,9 +462,16 @@ def admin_feedback_export(
     writer = csv.writer(output)
     writer.writerow([label for _, label in FEEDBACK_CSV_COLUMNS])
     for row in rows:
-        writer.writerow([_csv_cell(row.get(key)) for key, _ in FEEDBACK_CSV_COLUMNS])
+        cells = []
+        for key, _ in FEEDBACK_CSV_COLUMNS:
+            value = row.get(key)
+            if redact_pii and key in _CSV_PII_KEYS:
+                value = _redact_pii(value)
+            cells.append(_csv_cell(value))
+        writer.writerow(cells)
     audit.log(
-        _admin["id"], "feedback.export", "feedback", None, {"rows": len(rows)}
+        _admin["id"], "feedback.export", "feedback", None,
+        {"rows": len(rows), "redact_pii": redact_pii},
     )
     # 带 BOM，Excel 直接打开中文不乱码。
     return Response(
