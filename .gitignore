@@ -33,3 +33,8 @@ __pycache__/
 
 # pytest 在项目根目录生成的临时库
 /.pytest_tmp/
+
+# 本地运行数据与编辑器状态，不参与版本控制
+/data/
+/.cursor/
+/null
