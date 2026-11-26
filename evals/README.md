@@ -66,7 +66,10 @@ python evals/run_ragas_eval.py \
   --dataset evals/datasets/seed_v2.jsonl --limit 20
 
 # 安装 RAGAS 后可用：DeepSeek 作裁判，本地 BGE 作 embedding
+# 注意：不要在这个环境安装完整的 requirements.txt，它会把 langchain-core
+# 升到 1.x，和 RAGAS 0.2 的 langchain 0.3 栈冲突。
 pip install -r evals/requirements-eval.txt
+pip install fastembed qdrant-client openai python-dotenv markdown pymdown-extensions pygments
 python evals/run_ragas_eval.py \
   --dataset evals/datasets/seed_v2.jsonl --limit 20 --provider ragas
 # 需要 .env 里有 DEEPSEEK_API_KEY

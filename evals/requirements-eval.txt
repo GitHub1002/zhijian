@@ -1,6 +1,10 @@
 ragas>=0.2.10,<0.3
 datasets>=2.18,<4
 pandas>=2.0
-langchain-openai>=0.1,<0.4
+# RAGAS 0.2 still expects the 0.3.x langchain stack.
+langchain>=0.3.30,<1.0
+langchain-core>=0.3.85,<1.0
+langchain-openai>=0.3.35,<1.0
+langchain-community>=0.3,<1.0
 # Optional cross-check: uncomment to compare with LlamaIndex RetrieverEvaluator.
 # llama-index-core>=0.11,<0.13
