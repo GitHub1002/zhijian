@@ -74,6 +74,12 @@ python evals/run_ragas_eval.py \
   --dataset evals/datasets/seed_v2.jsonl --limit 20 --provider ragas
 # 需要 .env 里有 DEEPSEEK_API_KEY
 
+# 保留全部不可回答样本，观察拒答率
+python evals/run_ragas_eval.py \
+  --dataset evals/datasets/seed_v2.jsonl --limit 20 \
+  --include-hard-negatives --provider ragas
+# RAGAS 四项指标写在报告的 ragas_summary 里
+
 # 参数扫描：同一组检索参数只跑一次，门槛在缓存结果上复用
 python evals/run_sweep.py \
   --dataset evals/datasets/seed_v2.jsonl --limit 25 --include-hard-negatives

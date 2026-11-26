@@ -61,6 +61,14 @@ def _generate_answer(llm, rag, question, contexts):
     return llm.generate(rag.SYSTEM_PROMPT, prompt)
 
 
+RAGAS_KEYS = (
+    ("faithfulness", "faithfulness"),
+    ("answer_relevancy", "answer_relevancy"),
+    ("llm_context_precision_with_reference", "context_precision"),
+    ("context_recall", "context_recall"),
+)
+
+
 def _aggregate(rows):
     summary = {"cases": len(rows), "errors": sum(1 for row in rows if row.get("error"))}
     answerable = [row for row in rows if row["answerable"]]
@@ -80,10 +88,26 @@ def _aggregate(rows):
     return summary
 
 
+def _ragas_summary(records):
+    summary = {"cases": len(records)}
+    for source_key, target_key in RAGAS_KEYS:
+        values = [
+            float(record[source_key])
+            for record in records
+            if isinstance(record.get(source_key), (int, float))
+        ]
+        summary[target_key] = round(sum(values) / len(values), 4) if values else None
+    return summary
+
+
 def main():
     parser = argparse.ArgumentParser(description="RAG 回答质量评测")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument(
+        "--include-hard-negatives", action="store_true",
+        help="配合 --limit：截断后仍保留全部不可回答样本",
+    )
     parser.add_argument("--k", type=int, default=3)
     parser.add_argument("--provider", choices=["simple", "ragas"], default="simple")
     parser.add_argument("--out")
@@ -97,7 +121,14 @@ def main():
     if args.qdrant_path:
         os.environ["QDRANT_PATH"] = args.qdrant_path
 
-    cases = load_cases(args.dataset)[: args.limit]
+    all_cases = load_cases(args.dataset)
+    cases = all_cases[: args.limit]
+    if args.include_hard_negatives:
+        seen = {case["case_id"] for case in cases}
+        cases += [
+            case for case in all_cases
+            if not case["answerable"] and case["case_id"] not in seen
+        ]
 
     if args.dry_run:
         rows = [
@@ -148,7 +179,7 @@ def main():
                 answer = _generate_answer(llm, rag, case["question"], contexts)
                 row["answer"] = answer
                 row["refused"] = any(marker in answer for marker in REFUSAL_MARKERS)
-                if case["answerable"]:
+                if case["answerable"] and args.provider == "simple":
                     judged = llm.generate(
                         JUDGE_SYSTEM, _judge_prompt(case, answer, contexts)
                     )
@@ -181,7 +212,9 @@ def main():
             for row, case in zip(rows, cases)
             if row["answerable"] and not row["error"]
         ]
-        payload["ragas"] = run_ragas(samples)
+        ragas_records = run_ragas(samples)
+        payload["ragas"] = ragas_records
+        payload["ragas_summary"] = _ragas_summary(ragas_records)
 
     out = Path(args.out) if args.out else (
         ROOT / "evals" / "reports" / f"ragas_{args.provider}.json"
@@ -189,9 +222,16 @@ def main():
     write_json(out, payload)
     print(f"\nRAG EVAL · {args.provider}")
     print("=" * 24)
-    for key in ("faithfulness", "answer_relevancy", "context_precision",
-                "context_recall", "correct_refusal_rate", "errors"):
-        print(f"  {key:22} {summary.get(key)}")
+    if args.provider == "ragas" and payload.get("ragas_summary"):
+        ragas_summary = payload["ragas_summary"]
+        for key in ("faithfulness", "answer_relevancy", "context_precision",
+                    "context_recall", "cases"):
+            print(f"  {key:22} {ragas_summary.get(key)}")
+    else:
+        for key in JUDGE_KEYS:
+            print(f"  {key:22} {summary.get(key)}")
+    print(f"  {'correct_refusal_rate':22} {summary.get('correct_refusal_rate')}")
+    print(f"  {'errors':22} {summary.get('errors')}")
     print(f"\n  report: {out}")
 
     if not args.dry_run:
