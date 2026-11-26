@@ -444,6 +444,22 @@ export default {
                 <p v-if="state.adminFeedbackDetail.source_marks && state.adminFeedbackDetail.source_marks.length" class="admin-feedback-meta">
                   来源标记：<span v-for="mark in state.adminFeedbackDetail.source_marks" :key="mark.source_index + mark.mark">{{ mark.mark }}(#{{ mark.source_index }}) </span>
                 </p>
+                <div class="admin-section-title">修改历史</div>
+                <p v-if="!state.adminFeedbackDetail.revisions || !state.adminFeedbackDetail.revisions.length" class="admin-empty">没有修改记录。</p>
+                <div v-else class="admin-history-list">
+                  <div v-for="revision in state.adminFeedbackDetail.revisions" :key="revision.id" class="admin-history-row">
+                    <strong>{{ formatTime(revision.created_at) }} · {{ revision.actor_name || revision.actor_type }}</strong>
+                    <small>情感：{{ revision.snapshot.sentiment || '—' }} · 原因：{{ (revision.snapshot.reasons || []).join('、') || '未分类' }} · 评论：{{ revision.snapshot.comment || '无' }}</small>
+                  </div>
+                </div>
+                <div class="admin-section-title">分诊历史</div>
+                <p v-if="!state.adminFeedbackDetail.triage_events || !state.adminFeedbackDetail.triage_events.length" class="admin-empty">没有分诊记录。</p>
+                <div v-else class="admin-history-list">
+                  <div v-for="event in state.adminFeedbackDetail.triage_events" :key="event.id" class="admin-history-row">
+                    <strong>{{ formatTime(event.created_at) }} · {{ event.actor_name || '系统' }}</strong>
+                    <small>{{ event.from_status }} → {{ event.to_status }} · {{ event.category || '未分类' }}<template v-if="event.note"> · {{ event.note }}</template></small>
+                  </div>
+                </div>
                 <div class="admin-section-title">检索轨迹</div>
                 <p v-if="!state.adminFeedbackDetail.trace" class="admin-empty">这条回答没有轨迹。</p>
                 <template v-else>

@@ -1111,6 +1111,30 @@ def feedback_detail(feedback_id):
                 ).fetchall()
             ]
             item["trace"] = trace_item
+        revisions = []
+        for revision in conn.execute(
+            """SELECT r.id, r.actor_id, r.actor_type, r.snapshot_json,
+                      r.created_at, u.username AS actor_name
+               FROM feedback_revisions r
+               LEFT JOIN users u ON u.id = r.actor_id
+               WHERE r.feedback_id = ? ORDER BY r.id""",
+            (feedback_id,),
+        ).fetchall():
+            snapshot = _load_json(revision["snapshot_json"], {})
+            snapshot["reasons"] = _load_json(snapshot.get("reasons_json", "[]"), [])
+            revisions.append({**dict(revision), "snapshot": snapshot})
+        item["revisions"] = revisions
+        item["triage_events"] = [
+            dict(event)
+            for event in conn.execute(
+                """SELECT e.id, e.actor_id, e.from_status, e.to_status,
+                          e.category, e.note, e.created_at, u.username AS actor_name
+                   FROM feedback_triage_events e
+                   LEFT JOIN users u ON u.id = e.actor_id
+                   WHERE e.feedback_id = ? ORDER BY e.id""",
+                (feedback_id,),
+            ).fetchall()
+        ]
         return item
 
 
