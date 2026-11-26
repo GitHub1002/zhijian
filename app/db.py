@@ -375,6 +375,8 @@ def init_db():
                 ON admin_audit_log(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_audit_action
                 ON admin_audit_log(action, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_actor_action
+                ON admin_audit_log(actor_id, action, created_at DESC);
             CREATE TABLE IF NOT EXISTS answer_traces (
                 trace_id TEXT PRIMARY KEY,
                 answer_id INTEGER UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
