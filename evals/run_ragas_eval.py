@@ -148,7 +148,12 @@ def main():
         from app import llm, rag  # noqa: E402
 
         rows = []
-        for case in cases:
+        total = len(cases)
+        for position, case in enumerate(cases, start=1):
+            print(
+                f"  [{position}/{total}] {case['case_id']} 检索与生成…",
+                flush=True,
+            )
             row = {
                 "case_id": case["case_id"],
                 "question": case["question"],
@@ -200,6 +205,7 @@ def main():
     }
 
     if args.provider == "ragas" and not args.dry_run:
+        print("\n  生成完成，开始 RAGAS 评分…", flush=True)
         from evals.lib.ragas_adapter import run_ragas  # noqa: E402
 
         samples = [
@@ -215,6 +221,9 @@ def main():
         ragas_records = run_ragas(samples)
         payload["ragas"] = ragas_records
         payload["ragas_summary"] = _ragas_summary(ragas_records)
+        # 让 aggregate 也能被 check_thresholds 直接读取。
+        for key in ("faithfulness", "answer_relevancy", "context_precision", "context_recall"):
+            summary[key] = payload["ragas_summary"].get(key)
 
     out = Path(args.out) if args.out else (
         ROOT / "evals" / "reports" / f"ragas_{args.provider}.json"

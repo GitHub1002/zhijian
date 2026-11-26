@@ -26,7 +26,11 @@ def main():
     max_drop = float(config.get("max_drop", 0.02))
 
     failures = []
-    for section in ("retrieval", "ragas"):
+    is_ragas = any(
+        key in candidate
+        for key in ("faithfulness", "answer_relevancy", "context_precision", "context_recall")
+    )
+    for section in (("ragas",) if is_ragas else ("retrieval",)):
         section_thresholds = config.get(section) or {}
         if not any(key in candidate for key in section_thresholds):
             print(f"  SKIP {section}: 本次报告没有这些指标")
@@ -34,6 +38,9 @@ def main():
         for key, threshold in section_thresholds.items():
             value = candidate.get(key)
             if value is None:
+                if key == "correct_refusal_rate":
+                    print(f"  SKIP {key}: 本次没有不可回答样本")
+                    continue
                 failures.append(f"{key}: 缺少指标")
                 continue
             if key in LOWER_IS_BETTER:

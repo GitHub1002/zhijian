@@ -134,7 +134,7 @@ python evals/run_retrieval_eval.py \
 - 真实评测建议先用 `python evals/prepare_eval_env.py` 复制一份 `data/eval/snapshot-.../`，再用 `--db-path` / `--qdrant-path` 指向快照。
 - 首次真实运行会加载嵌入和重排模型；如果本机没有缓存，会触发下载。
 - `--dry-run` 不导入 `app`，用于 CI 或快速检查脚本是否可用。
-- `configs/baseline_vector.json` 是加证据门槛之前的基线；`configs/baseline_rerank_gate.json` 是 seed_v1 基线；当前基线是 `configs/baseline_seed_v2.json`。
+- `configs/baseline_vector.json` 是加证据门槛之前的基线；`configs/baseline_rerank_gate.json` 是 seed_v1 基线；当前检索基线是 `configs/baseline_seed_v2.json`，回答质量基线是 `configs/baseline_ragas_seed_v2.json`。
 - `configs/thresholds.json` 已启用 `false_answer_rate` / `correct_refusal_rate` 硬门禁，回归时 `check_thresholds.py` 退出码非 0。
 
 ## 标注流程
