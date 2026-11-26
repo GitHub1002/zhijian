@@ -553,9 +553,9 @@ export async function openAdminFeedback() {
     loadAdminFeedback(1),
     loadAdminAnalytics(),
     state.adminQualityTab === 'tasks'
-      ? loadAdminContentTasks(1)
+      ? Promise.all([loadAdminContentTasks(1), loadAdminEvalRuns(1)])
       : state.adminQualityTab === 'curated'
-        ? loadAdminCuratedExamples(1)
+        ? Promise.all([loadAdminCuratedExamples(1), loadAdminEvalRuns(1)])
         : state.adminQualityTab === 'experiments'
           ? loadAdminExperiments()
           : state.adminQualityTab === 'eval'
@@ -675,7 +675,10 @@ export async function loadAdminCuratedExamples(page = 1) {
   })
   try {
     const data = await api(`/api/admin/curated-examples?${params.toString()}`)
-    state.adminCuratedExamples = data.items || []
+    state.adminCuratedExamples = (data.items || []).map(item => ({
+      ...item,
+      eval_run_id: item.eval_run_id || 0,
+    }))
     state.adminCuratedPage = data.page || 1
     state.adminCuratedPages = data.pages || 1
     state.adminCuratedTotal = data.total || 0
@@ -710,7 +713,10 @@ export async function loadAdminContentTasks(page = 1) {
   })
   try {
     const data = await api(`/api/admin/content-tasks?${params.toString()}`)
-    state.adminContentTasks = data.items || []
+    state.adminContentTasks = (data.items || []).map(item => ({
+      ...item,
+      eval_run_id: item.eval_run_id || 0,
+    }))
     state.adminContentTaskPage = data.page || 1
     state.adminContentTaskPages = data.pages || 1
     state.adminContentTaskTotal = data.total || 0

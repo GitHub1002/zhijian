@@ -131,8 +131,14 @@ export default {
     function switchTab(tab) {
       state.adminQualityTab = tab
       if (tab === 'overview') loadAdminAnalytics()
-      if (tab === 'tasks') loadAdminContentTasks(1)
-      if (tab === 'curated') loadAdminCuratedExamples(1)
+      if (tab === 'tasks') {
+        loadAdminContentTasks(1)
+        loadAdminEvalRuns(1)
+      }
+      if (tab === 'curated') {
+        loadAdminCuratedExamples(1)
+        loadAdminEvalRuns(1)
+      }
       if (tab === 'experiments') loadAdminExperiments()
     }
 
@@ -145,6 +151,7 @@ export default {
         status: example.status,
         use_as_few_shot: example.use_as_few_shot,
         eval_passed: example.eval_passed,
+        eval_run_id: Number(example.eval_run_id) || 0,
       })
     }
 
@@ -244,7 +251,11 @@ export default {
     }
 
     function saveTask(task) {
-      updateContentTask(task.id, { status: task.status, priority: task.priority })
+      updateContentTask(task.id, {
+        status: task.status,
+        priority: task.priority,
+        eval_run_id: Number(task.eval_run_id) || 0,
+      })
     }
 
     function makeTask() {
@@ -489,6 +500,10 @@ export default {
                   <small>{{ taskKindLabel(task.kind) }} · {{ taskPriorityLabel(task.priority) }} · {{ task.source }}{{ task.heading ? ' > ' + task.heading : '' }} · 关联反馈 {{ task.feedback_count }}</small>
                   <p v-if="task.resolution_note" class="admin-feedback-comment">{{ task.resolution_note }}</p>
                 </div>
+                <select v-model="task.eval_run_id" @change="saveTask(task)">
+                  <option :value="0">未关联评测</option>
+                  <option v-for="run in state.adminEvalRuns" :key="run.id" :value="run.id">#{{ run.id }} {{ run.name }}</option>
+                </select>
                 <select v-model="task.status" @change="saveTask(task)">
                   <option v-for="item in taskStatusOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option>
                 </select>
@@ -519,6 +534,10 @@ export default {
                   <pre class="admin-curated-answer">{{ item.answer }}</pre>
                 </div>
                 <div class="admin-curated-actions">
+                  <select v-model="item.eval_run_id" @change="saveCurated(item)">
+                    <option :value="0">未关联评测</option>
+                    <option v-for="run in state.adminEvalRuns" :key="run.id" :value="run.id">#{{ run.id }} {{ run.name }}</option>
+                  </select>
                   <select v-model="item.status" @change="saveCurated(item)">
                     <option v-for="option in curatedStatusOptions" :key="option[0]" :value="option[0]">{{ option[1] }}</option>
                   </select>

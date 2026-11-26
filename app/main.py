@@ -104,6 +104,7 @@ class ContentTaskUpdateRequest(BaseModel):
     priority: Optional[Literal["low", "medium", "high"]] = None
     kind: Optional[str] = None
     owner_id: Optional[int] = None
+    eval_run_id: Optional[int] = None
     resolution_note: Optional[str] = Field(default=None, max_length=2000)
 
 
@@ -121,6 +122,7 @@ class CuratedExampleUpdateRequest(BaseModel):
     status: Optional[Literal["candidate", "approved", "rejected"]] = None
     use_as_few_shot: Optional[bool] = None
     eval_passed: Optional[bool] = None
+    eval_run_id: Optional[int] = None
 
 
 class ExperimentVariantRequest(BaseModel):
@@ -582,6 +584,7 @@ def admin_update_content_task(
         kind=req.kind,
         owner_id=req.owner_id,
         resolution_note=req.resolution_note,
+        eval_run_id=req.eval_run_id,
         updated_by=admin["id"],
     )
     if not task:
@@ -644,6 +647,7 @@ def admin_update_curated_example(
         status=req.status,
         use_as_few_shot=req.use_as_few_shot,
         eval_passed=req.eval_passed,
+        eval_run_id=req.eval_run_id,
         reviewed_by=admin["id"],
     )
     if not example:

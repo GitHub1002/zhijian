@@ -41,6 +41,7 @@ def _approved_example(database):
         status="approved",
         use_as_few_shot=True,
         eval_passed=True,
+        eval_run_id=1,
         reviewed_by=user["id"],
     )
     return user, answer_id, candidate
@@ -126,3 +127,16 @@ def test_prompt_filters_examples_by_user_libraries(temp_db, monkeypatch):
     prompt = rag._prompt_for_state(state)
 
     assert "表达示例" not in prompt
+
+
+def test_eval_passed_without_run_is_not_used(temp_db):
+    user, _, candidate = _candidate(temp_db)
+    curated_store.update_example(
+        candidate["id"],
+        status="approved",
+        use_as_few_shot=True,
+        eval_passed=True,
+        reviewed_by=user["id"],
+    )
+
+    assert curated_store.approved_examples(3, ["hr"]) == []

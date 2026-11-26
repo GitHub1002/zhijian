@@ -113,7 +113,8 @@ def create_content_task(*, title, description="", source="", heading="", library
 
 
 def update_content_task(task_id, *, status=None, priority=None, kind=None,
-                        owner_id=None, resolution_note=None, updated_by=None):
+                        owner_id=None, resolution_note=None, eval_run_id=None,
+                        updated_by=None):
     updates = {}
     if status is not None:
         updates["status"] = status
@@ -125,6 +126,8 @@ def update_content_task(task_id, *, status=None, priority=None, kind=None,
         updates["owner_id"] = owner_id
     if resolution_note is not None:
         updates["resolution_note"] = resolution_note
+    if eval_run_id is not None:
+        updates["eval_run_id"] = None if int(eval_run_id) == 0 else int(eval_run_id)
     if not updates:
         return get_content_task(task_id)
     updates["updated_at"] = _now()

@@ -96,14 +96,17 @@ def test_update_and_list_tasks(temp_db):
     task = content.create_task_for_feedback(feedback_id, user["id"])["task"]
 
     updated = content_store.update_content_task(
-        task["id"], status="resolved", resolution_note="已补文档", updated_by=user["id"]
+        task["id"], status="resolved", resolution_note="已补文档",
+        eval_run_id=7, updated_by=user["id"]
     )
     assert updated["status"] == "resolved"
     assert updated["resolution_note"] == "已补文档"
+    assert updated["eval_run_id"] == 7
 
     page = content_store.list_content_tasks(status="resolved")
     assert page["total"] == 1
     assert page["items"][0]["feedback_count"] == 1
+    assert page["items"][0]["eval_run_id"] == 7
 
 
 def test_positive_feedback_is_not_a_content_task(temp_db):

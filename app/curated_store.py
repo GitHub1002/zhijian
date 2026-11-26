@@ -131,7 +131,7 @@ def get_example(example_id):
 
 
 def update_example(example_id, *, status=None, use_as_few_shot=None,
-                   eval_passed=None, reviewed_by=None):
+                   eval_passed=None, eval_run_id=None, reviewed_by=None):
     updates = {}
     if status is not None:
         updates["status"] = status
@@ -141,6 +141,8 @@ def update_example(example_id, *, status=None, use_as_few_shot=None,
         updates["use_as_few_shot"] = 1 if use_as_few_shot else 0
     if eval_passed is not None:
         updates["eval_passed"] = 1 if eval_passed else 0
+    if eval_run_id is not None:
+        updates["eval_run_id"] = None if int(eval_run_id) == 0 else int(eval_run_id)
     if not updates:
         return get_example(example_id)
     updates["updated_at"] = db.now()
@@ -167,7 +169,7 @@ def approved_examples(limit=3, libraries=None):
         rows = conn.execute(
             f"""SELECT question, answer, library FROM curated_examples
                 WHERE status = 'approved' AND use_as_few_shot = 1
-                  AND eval_passed = 1
+                  AND eval_passed = 1 AND eval_run_id IS NOT NULL
                   AND library IN ({placeholders})
                 ORDER BY updated_at DESC, id DESC
                 LIMIT ?""",

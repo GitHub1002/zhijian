@@ -259,6 +259,7 @@ def init_db():
                 status TEXT NOT NULL DEFAULT 'candidate',
                 use_as_few_shot INTEGER NOT NULL DEFAULT 0,
                 eval_passed INTEGER NOT NULL DEFAULT 0,
+                eval_run_id INTEGER,
                 reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 reviewed_at TEXT,
                 created_at TEXT NOT NULL,
@@ -505,9 +506,10 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
         _add_column(conn, "curated_examples", "eval_passed", "INTEGER NOT NULL DEFAULT 0")
-        conn.execute("PRAGMA user_version = 9")
+        _add_column(conn, "curated_examples", "eval_run_id", "INTEGER")
+        conn.execute("PRAGMA user_version = 10")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '9', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '10', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )
