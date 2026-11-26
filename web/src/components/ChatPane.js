@@ -128,6 +128,7 @@ export default {
     }
 
     async function submitFeedback(message) {
+      if (message._submitting) return
       const feedback = ensureFeedback(message)
       if (!feedback.sentiment) {
         message._hint = '请先选择有帮助或没帮助'
@@ -153,6 +154,7 @@ export default {
         comment: (feedback.comment || '').trim(),
         source_marks: feedback.source_marks,
       }
+      message._submitting = true
       try {
         if (feedback.id) await updateFeedback(message, payload)
         else await sendFeedback(message, payload)
@@ -172,6 +174,8 @@ export default {
         }
         message._hint = error.message
         notify(error.message, 'error')
+      } finally {
+        message._submitting = false
       }
     }
 
@@ -256,8 +260,8 @@ export default {
                 </template>
                 <template v-else>
                   <span>这次回答有帮助吗？</span>
-                  <button type="button" class="feedback-choice" :class="{ selected: message.feedback && message.feedback.sentiment === 'positive' }" aria-label="有帮助" @click="chooseSentiment(message, 'positive')">👍</button>
-                  <button type="button" class="feedback-choice" :class="{ selected: message.feedback && message.feedback.sentiment === 'negative' }" aria-label="没帮助" @click="chooseSentiment(message, 'negative')">👎</button>
+                  <button type="button" class="feedback-choice" :disabled="message._submitting" :class="{ selected: message.feedback && message.feedback.sentiment === 'positive' }" aria-label="有帮助" @click="chooseSentiment(message, 'positive')">👍</button>
+                  <button type="button" class="feedback-choice" :disabled="message._submitting" :class="{ selected: message.feedback && message.feedback.sentiment === 'negative' }" aria-label="没帮助" @click="chooseSentiment(message, 'negative')">👎</button>
                   <div v-if="message._editing" class="feedback-form">
                     <div class="feedback-reason-chips" role="group" aria-label="反馈原因">
                       <button v-for="option in reasonOptions" :key="option[0]" type="button" class="reason-chip" :class="{ active: hasReason(message, option[0]) }" @click="toggleReason(message, option[0])">{{ option[1] }}</button>
@@ -271,8 +275,8 @@ export default {
                     </div>
                     <small>{{ message._hint || '' }}</small>
                     <div class="feedback-actions">
-                      <button type="button" @click="submitFeedback(message)">提交反馈</button>
-                      <button type="button" class="feedback-cancel" @click="cancelFeedback(message)">取消</button>
+                      <button type="button" :disabled="message._submitting" @click="submitFeedback(message)">{{ message._submitting ? '提交中…' : '提交反馈' }}</button>
+                      <button type="button" class="feedback-cancel" :disabled="message._submitting" @click="cancelFeedback(message)">取消</button>
                     </div>
                   </div>
                 </template>

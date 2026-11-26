@@ -675,6 +675,7 @@ body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
 }
 .feedback-actions > button:hover { border-color: var(--ink); }
 .feedback-actions .feedback-cancel { color: var(--ink-3); border-color: var(--line-2); }
+.feedback-actions > button:disabled { opacity: .55; cursor: wait; }
 
 .modal.feedback-admin-modal {
   width: min(1120px, 96vw);
