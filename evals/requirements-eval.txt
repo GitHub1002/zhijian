@@ -1,5 +1,6 @@
-ragas>=0.2,<0.4
+ragas>=0.2.10,<0.3
 datasets>=2.18,<4
 pandas>=2.0
-# 可选：用 LlamaIndex RetrieverEvaluator 交叉校验
-llama-index-core>=0.11,<0.13
+langchain-openai>=0.1,<0.4
+# Optional cross-check: uncomment to compare with LlamaIndex RetrieverEvaluator.
+# llama-index-core>=0.11,<0.13
