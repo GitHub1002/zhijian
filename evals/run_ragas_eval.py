@@ -58,7 +58,7 @@ def _generate_answer(llm, rag, question, contexts):
         f"问题：{question}\n\n"
         f"参考资料（只能引用这些编号）：\n{blocks}"
     )
-    return llm.generate(rag.SYSTEM_PROMPT, prompt)
+    return rag._clean_generated_answer(llm.generate(rag.SYSTEM_PROMPT, prompt))
 
 
 RAGAS_KEYS = (

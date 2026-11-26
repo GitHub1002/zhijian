@@ -35,6 +35,10 @@ def main():
         if not any(key in candidate for key in section_thresholds):
             print(f"  SKIP {section}: 本次报告没有这些指标")
             continue
+        section_drop = (
+            float(config.get("max_drop_ragas", max_drop))
+            if section == "ragas" else max_drop
+        )
         for key, threshold in section_thresholds.items():
             value = candidate.get(key)
             if value is None:
@@ -53,7 +57,7 @@ def main():
                 drop = old - value
                 if key in LOWER_IS_BETTER:
                     drop = -drop
-                if drop > max_drop:
+                if drop > section_drop:
                     failures.append(f"{key}: 比基线下降 {drop:.4f}")
 
     print("THRESHOLD CHECK")

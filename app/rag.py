@@ -12,9 +12,11 @@ from . import config, curated_store, db, embedder, experiments, llm, md_render, 
 
 # 提示词是行为约束的一部分：只允许引用给定编号，证据不足必须拒答。
 # 修改时要同步 README 里的“反幻觉”说明。
+REFUSAL_ANSWER = "当前授权知识库没有足够依据，暂不作答，请申请对应知识库权限或联系管理员。"
 SYSTEM_PROMPT = (
     "你是一个企业内部知识库助手。只能使用参考资料回答，不能使用常识补充或猜测。"
-    "如果参考资料不足以回答问题，必须直接回复‘当前授权知识库没有足够依据，暂不作答，请申请对应知识库权限或联系管理员。’。"
+    f"如果整篇参考资料都不足以回答问题，必须直接回复‘{REFUSAL_ANSWER}’；"
+    "如果已经给出有依据的结论，不要再追加拒答句。"
     "有依据时先给结论，再列必要步骤和例外。关键结论必须使用 [1]、[2] 这样的引用编号；引用编号必须对应参考资料编号。"
     "不要编造来源，不要引用未提供的资料，控制在 480 字以内。"
 )
@@ -27,6 +29,16 @@ def _param(cfg, key):
     if cfg and key in cfg:
         return cfg[key]
     return getattr(config, key)
+
+
+def _clean_generated_answer(answer):
+    """回答已有引用和实质内容时，去掉模型额外追加的整段拒答句。"""
+    text = (answer or "").strip()
+    if REFUSAL_ANSWER in text:
+        cleaned = text.replace(REFUSAL_ANSWER, "").strip()
+        if cleaned and re.search(r"\[\d+\]", cleaned):
+            return cleaned
+    return answer
 
 
 def _get_reranker(cfg=None):
@@ -342,7 +354,7 @@ def _ask_legacy(question, user_id):
     )
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
-    answer = llm.generate(SYSTEM_PROMPT, user_prompt)
+    answer = _clean_generated_answer(llm.generate(SYSTEM_PROMPT, user_prompt))
     answer_id = db.create_answer(user_id, question, answer, json.dumps(sources, ensure_ascii=False))
     conversation_id = db.conversation_id_for_answer(answer_id)
     trace_id = _record_trace(
@@ -566,14 +578,19 @@ def persist_prepared(state, answer, generation_ms=None):
     timings = dict(state.get("timings") or {})
     if generation_ms is not None:
         timings["generation_ms"] = int(generation_ms)
-    return _graph_persist({**state, "answer": answer, "timings": timings})["result"]
+    return _graph_persist(
+        {**state, "answer": _clean_generated_answer(answer), "timings": timings}
+    )["result"]
 
 
 def _graph_generate(state):
     user_prompt = _prompt_for_state(state)
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
-    return {"answer": llm.generate(SYSTEM_PROMPT, user_prompt), "stop": False}
+    return {
+        "answer": _clean_generated_answer(llm.generate(SYSTEM_PROMPT, user_prompt)),
+        "stop": False,
+    }
 
 
 def _graph_persist(state):
