@@ -15,16 +15,29 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
-from pydantic import BaseModel, Field
-
-from . import analytics, audit, config, content, content_store, curated_store, db, documents, eval_store, experiments, feedback as feedback_rules, ingest, llm, md_render, observability, rag, rate_limit, tracing
+from . import audit, config, curated_store, db, documents, feedback as feedback_rules, ingest, llm, md_render, observability, rag, rate_limit, tracing
+from .security import admin_user, current_user
+from .routes_admin_quality import router as admin_quality_router
+from .schemas import (
+    AuthRequest,
+    AskRequest,
+    FeedbackRequest,
+    FeedbackUpdateRequest,
+    FeedbackTriageRequest,
+    SourceClickRequest,
+    DocRequest,
+    ContentRequest,
+    SyncRequest,
+    PermissionReviewRequest,
+    ProfileRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,140 +54,11 @@ async def lifespan(_app):
 
 app = FastAPI(title="智检", lifespan=lifespan)
 app.middleware("http")(observability.middleware)
+app.include_router(admin_quality_router)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
 # 请求体模型只做粗粒度的格式/长度校验；权限、路径和业务状态在路由里判断。
-class AuthRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=40)
-    password: str = Field(min_length=6, max_length=128)
-
-
-class AskRequest(BaseModel):
-    question: str
-    conversation_id: Optional[int] = None
-
-
-class FeedbackSourceMark(BaseModel):
-    source_index: int = Field(ge=1, le=50)
-    mark: Literal["wrong_citation", "irrelevant", "outdated", "missing_context"]
-
-
-class FeedbackRequest(BaseModel):
-    answer_id: int
-    sentiment: Literal["positive", "negative"]
-    reasons: list[str] = Field(default_factory=list)
-    comment: str = Field(default="", max_length=2000)
-    corrected_answer: str = Field(default="", max_length=4000)
-    source_marks: list[FeedbackSourceMark] = Field(default_factory=list, max_length=20)
-    client_version: str = Field(default="", max_length=40)
-
-
-class FeedbackUpdateRequest(BaseModel):
-    sentiment: Optional[Literal["positive", "negative"]] = None
-    reasons: Optional[list[str]] = None
-    comment: Optional[str] = Field(default=None, max_length=2000)
-    corrected_answer: Optional[str] = Field(default=None, max_length=4000)
-    source_marks: Optional[list[FeedbackSourceMark]] = None
-
-
-class FeedbackTriageRequest(BaseModel):
-    status: Literal["new", "triaged", "in_progress", "resolved", "dismissed"]
-    category: str
-    note: str = Field(default="", max_length=2000)
-
-
-class SourceClickRequest(BaseModel):
-    answer_id: int
-    source: str = Field(default="", max_length=300)
-    heading: str = Field(default="", max_length=300)
-    anchor: str = Field(default="", max_length=300)
-    library: str = Field(default="", max_length=40)
-    source_index: int = Field(default=0, ge=0, le=50)
-
-
-class ContentTaskRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=120)
-    description: str = Field(default="", max_length=4000)
-    source: str = Field(default="", max_length=300)
-    heading: str = Field(default="", max_length=300)
-    library: str = Field(default="", max_length=40)
-    kind: str = "doc_fix"
-    priority: str = "medium"
-    owner_id: Optional[int] = None
-    eval_run_id: Optional[int] = None
-
-
-class ContentTaskUpdateRequest(BaseModel):
-    status: Optional[Literal["open", "in_progress", "resolved", "dismissed"]] = None
-    priority: Optional[Literal["low", "medium", "high"]] = None
-    kind: Optional[str] = None
-    owner_id: Optional[int] = None
-    eval_run_id: Optional[int] = None
-    resolution_note: Optional[str] = Field(default=None, max_length=2000)
-
-
-class ContentTaskFromFeedbackRequest(BaseModel):
-    title: Optional[str] = Field(default=None, max_length=120)
-    description: Optional[str] = Field(default=None, max_length=4000)
-    source: Optional[str] = Field(default=None, max_length=300)
-    heading: Optional[str] = Field(default=None, max_length=300)
-    library: Optional[str] = Field(default=None, max_length=40)
-    kind: Optional[str] = None
-    priority: Optional[str] = None
-
-
-class CuratedExampleUpdateRequest(BaseModel):
-    status: Optional[Literal["candidate", "approved", "rejected"]] = None
-    use_as_few_shot: Optional[bool] = None
-    eval_passed: Optional[bool] = None
-    eval_run_id: Optional[int] = None
-
-
-class ExperimentVariantRequest(BaseModel):
-    variant_key: str = Field(min_length=1, max_length=40)
-    name: str = Field(default="", max_length=80)
-    config: dict = Field(default_factory=dict)
-    traffic_pct: int = Field(default=0, ge=0, le=100)
-    is_control: bool = False
-
-
-class ExperimentRequest(BaseModel):
-    key: str = Field(min_length=1, max_length=60)
-    name: str = Field(min_length=1, max_length=120)
-    description: str = Field(default="", max_length=2000)
-    variants: list[ExperimentVariantRequest] = Field(min_length=1, max_length=10)
-    guardrails: dict = Field(default_factory=dict)
-
-
-class ExperimentUpdateRequest(BaseModel):
-    status: Optional[Literal["draft", "running", "paused", "ended"]] = None
-    variants: Optional[list[ExperimentVariantRequest]] = None
-    guardrails: Optional[dict] = None
-
-
-class DocRequest(BaseModel):
-    path: str
-    content: str
-
-
-class ContentRequest(BaseModel):
-    content: str
-
-
-class SyncRequest(BaseModel):
-    source_dir: str
-
-
-class PermissionReviewRequest(BaseModel):
-    status: str
-
-
-class ProfileRequest(BaseModel):
-    display_name: Optional[str] = None
-    avatar: Optional[str] = None
-
-
 def _set_session(response: Response, user_id: int):
     # Cookie 只放随机 token；httponly 防脚本读取，samesite=lax 挡跨站 POST，
     # 生产环境通过 SESSION_SECURE=1 加 Secure 标记。
@@ -184,17 +68,6 @@ def _set_session(response: Response, user_id: int):
     )
 
 
-def current_user(request: Request):
-    user = db.get_user_by_session(request.cookies.get(config.SESSION_COOKIE))
-    if not user:
-        raise HTTPException(status_code=401, detail="请先登录")
-    return user
-
-
-def admin_user(user=Depends(current_user)):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-    return user
 
 
 def _has_library(user, library):
@@ -520,313 +393,6 @@ def admin_feedback_triage(
         {"status": req.status, "category": req.category},
     )
     return {"ok": True, "feedback": item}
-
-
-@app.get("/api/admin/analytics/overview")
-def admin_analytics_overview(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
-    return analytics.overview(days)
-
-
-@app.get("/api/admin/analytics/timeseries")
-def admin_analytics_timeseries(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
-    return {"items": analytics.timeseries(days)}
-
-
-@app.get("/api/admin/analytics/libraries")
-def admin_analytics_libraries(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
-    return {"items": analytics.libraries(days)}
-
-
-@app.get("/api/admin/analytics/reasons")
-def admin_analytics_reasons(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
-    return {"items": analytics.reasons(days)}
-
-
-@app.get("/api/admin/analytics/categories")
-def admin_analytics_categories(days: int = analytics.DEFAULT_DAYS, _admin=Depends(admin_user)):
-    return {"items": analytics.categories(days)}
-
-
-@app.get("/api/admin/analytics/clusters")
-def admin_analytics_clusters(
-    days: int = analytics.DEFAULT_DAYS,
-    limit: int = 20,
-    _admin=Depends(admin_user),
-):
-    return {"items": analytics.clusters(days, limit)}
-
-
-@app.get("/api/admin/content-tasks")
-def admin_content_tasks(
-    page: int = 1,
-    page_size: int = 20,
-    status: Optional[str] = None,
-    priority: Optional[str] = None,
-    kind: Optional[str] = None,
-    library: Optional[str] = None,
-    q: Optional[str] = None,
-    _admin=Depends(admin_user),
-):
-    return content_store.list_content_tasks(
-        page=page,
-        page_size=page_size,
-        status=status,
-        priority=priority,
-        kind=kind,
-        library=library,
-        q=(q or "")[:100] or None,
-    )
-
-
-@app.post("/api/admin/content-tasks")
-def admin_create_content_task(req: ContentTaskRequest, admin=Depends(admin_user)):
-    if req.kind not in content.KINDS:
-        raise HTTPException(status_code=422, detail="未知任务类型")
-    if req.priority not in content.PRIORITIES:
-        raise HTTPException(status_code=422, detail="未知优先级")
-    try:
-        task = content_store.create_content_task(
-            title=req.title,
-            description=req.description,
-            source=req.source,
-            heading=req.heading,
-            library=req.library,
-            kind=req.kind,
-            priority=req.priority,
-            owner_id=req.owner_id,
-            eval_run_id=req.eval_run_id,
-            created_by=admin["id"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    audit.log(
-        admin["id"], "content_task.create", "content_task", task["id"],
-        {"kind": req.kind, "priority": req.priority},
-    )
-    return {"ok": True, "task": task}
-
-
-@app.get("/api/admin/content-tasks/{task_id}")
-def admin_content_task_detail(task_id: int, _admin=Depends(admin_user)):
-    task = content_store.get_content_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="内容任务不存在")
-    return {"task": task}
-
-
-@app.patch("/api/admin/content-tasks/{task_id}")
-def admin_update_content_task(
-    task_id: int, req: ContentTaskUpdateRequest, admin=Depends(admin_user)
-):
-    if req.kind is not None and req.kind not in content.KINDS:
-        raise HTTPException(status_code=422, detail="未知任务类型")
-    try:
-        task = content_store.update_content_task(
-            task_id,
-            status=req.status,
-            priority=req.priority,
-            kind=req.kind,
-            owner_id=req.owner_id,
-            resolution_note=req.resolution_note,
-            eval_run_id=req.eval_run_id,
-            updated_by=admin["id"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    if not task:
-        raise HTTPException(status_code=404, detail="内容任务不存在")
-    audit.log(
-        admin["id"], "content_task.update", "content_task", task_id,
-        {"status": req.status, "priority": req.priority, "kind": req.kind},
-    )
-    return {"ok": True, "task": task}
-
-
-@app.post("/api/admin/feedback/{feedback_id}/task")
-def admin_task_from_feedback(
-    feedback_id: int,
-    req: Optional[ContentTaskFromFeedbackRequest] = None,
-    admin=Depends(admin_user),
-):
-    try:
-        result = content.create_task_for_feedback(
-            feedback_id, admin["id"], req.model_dump() if req else {}
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    if not result:
-        raise HTTPException(status_code=404, detail="反馈不存在")
-    audit.log(
-        admin["id"], "content_task.from_feedback", "feedback", feedback_id,
-        {"task_id": result["task"]["id"], "created": result["created"]},
-    )
-    return {"ok": True, **result}
-
-
-@app.get("/api/admin/curated-examples")
-def admin_curated_examples(
-    page: int = 1,
-    page_size: int = 20,
-    status: Optional[str] = None,
-    library: Optional[str] = None,
-    _admin=Depends(admin_user),
-):
-    return curated_store.list_examples(
-        page=page, page_size=page_size, status=status, library=library
-    )
-
-
-@app.get("/api/admin/curated-examples/{example_id}")
-def admin_curated_example_detail(example_id: int, _admin=Depends(admin_user)):
-    example = curated_store.get_example(example_id)
-    if not example:
-        raise HTTPException(status_code=404, detail="精选正例不存在")
-    return {"example": example}
-
-
-@app.patch("/api/admin/curated-examples/{example_id}")
-def admin_update_curated_example(
-    example_id: int, req: CuratedExampleUpdateRequest, admin=Depends(admin_user)
-):
-    try:
-        example = curated_store.update_example(
-            example_id,
-            status=req.status,
-            use_as_few_shot=req.use_as_few_shot,
-            eval_passed=req.eval_passed,
-            eval_run_id=req.eval_run_id,
-            reviewed_by=admin["id"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    if not example:
-        raise HTTPException(status_code=404, detail="精选正例不存在")
-    audit.log(
-        admin["id"], "curated.update", "curated_example", example_id,
-        {
-            "status": req.status,
-            "use_as_few_shot": req.use_as_few_shot,
-            "eval_passed": req.eval_passed,
-        },
-    )
-    return {"ok": True, "example": example}
-
-
-@app.get("/api/admin/experiments")
-def admin_experiments(_admin=Depends(admin_user)):
-    return {"items": experiments.list_experiments()}
-
-
-@app.post("/api/admin/experiments")
-def admin_create_experiment(req: ExperimentRequest, admin=Depends(admin_user)):
-    try:
-        item = experiments.create_experiment(
-            req.key,
-            req.name,
-            req.description,
-            [variant.model_dump() for variant in req.variants],
-            req.guardrails,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    audit.log(
-        admin["id"], "experiment.create", "experiment", item["key"],
-        {"variants": [variant["variant_key"] for variant in item["variants"]]},
-    )
-    return {"ok": True, "experiment": item}
-
-
-@app.get("/api/admin/experiments/{key}")
-def admin_experiment_detail(key: str, _admin=Depends(admin_user)):
-    item = experiments.get_experiment(key)
-    if not item:
-        raise HTTPException(status_code=404, detail="实验不存在")
-    return {"experiment": item}
-
-
-@app.patch("/api/admin/experiments/{key}")
-def admin_update_experiment(
-    key: str, req: ExperimentUpdateRequest, admin=Depends(admin_user)
-):
-    try:
-        item = experiments.update_experiment(
-            key,
-            status=req.status,
-            variants=[variant.model_dump() for variant in req.variants]
-            if req.variants is not None
-            else None,
-            guardrails=req.guardrails,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    if not item:
-        raise HTTPException(status_code=404, detail="实验不存在")
-    audit.log(
-        admin["id"], "experiment.update", "experiment", key,
-        {"status": req.status, "variants": req.variants is not None},
-    )
-    return {"ok": True, "experiment": item}
-
-
-@app.get("/api/admin/experiments/{key}/results")
-def admin_experiment_results(
-    key: str, days: int = 14, _admin=Depends(admin_user)
-):
-    item = experiments.experiment_results(key, days)
-    if not item:
-        raise HTTPException(status_code=404, detail="实验不存在")
-    return item
-
-
-@app.get("/api/admin/eval/runs")
-def admin_eval_runs(page: int = 1, page_size: int = 20, _admin=Depends(admin_user)):
-    return eval_store.list_runs(page=page, page_size=page_size)
-
-
-@app.get("/api/admin/eval/runs/{run_id}")
-def admin_eval_run_detail(run_id: int, _admin=Depends(admin_user)):
-    item = eval_store.get_run(run_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="评测记录不存在")
-    return {"run": item}
-
-
-@app.delete("/api/admin/eval/runs/{run_id}")
-def admin_delete_eval_run(run_id: int, admin=Depends(admin_user)):
-    if not eval_store.delete_run(run_id):
-        raise HTTPException(status_code=404, detail="评测记录不存在")
-    audit.log(admin["id"], "eval.delete", "eval_run", run_id)
-    return {"ok": True}
-
-
-@app.get("/api/admin/eval/runs/{run_id}/rerun-command")
-def admin_eval_rerun_command(run_id: int, _admin=Depends(admin_user)):
-    result = eval_store.rerun_command(run_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="评测记录不存在")
-    return result
-
-
-@app.get("/api/admin/audit-log")
-def admin_audit_log(
-    page: int = 1,
-    page_size: int = 20,
-    action: Optional[str] = None,
-    target_type: Optional[str] = None,
-    actor_id: Optional[int] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    _admin=Depends(admin_user),
-):
-    return audit.list_events(
-        page=page,
-        page_size=page_size,
-        action=action,
-        target_type=target_type,
-        actor_id=actor_id,
-        date_from=date_from,
-        date_to=date_to,
-    )
 
 
 def _ask_error_detail(exc):
