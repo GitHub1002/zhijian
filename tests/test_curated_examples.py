@@ -29,7 +29,7 @@ def _candidate(database):
         json.dumps(SOURCES, ensure_ascii=False),
     )
     feedback_id = database.save_feedback(
-        answer_id, user["id"], 5, sentiment="positive", reasons=["helpful"], comment="很有用"
+        answer_id, user["id"], sentiment="positive", reasons=["helpful"], comment="很有用"
     )
     return user, answer_id, curated_store.ensure_candidate(answer_id, feedback_id)
 

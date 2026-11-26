@@ -861,13 +861,14 @@ def _trace_id_for_answer(conn, answer_id):
     return row["trace_id"] if row else None
 
 
-def save_feedback(answer_id, user_id, rating, reason="", *, sentiment="", reasons=None,
+def save_feedback(answer_id, user_id, *, sentiment, reasons=None,
                   comment="", corrected_answer="", source_marks=None):
-    """兼容旧调用的同时写入情感、原因和来源标记。"""
+    """写入情感、原因和来源标记；rating 列由 sentiment 推导，兼容历史数据。"""
+    if sentiment not in {"positive", "negative"}:
+        raise ValueError("sentiment 只能是 positive 或 negative")
     now = _now()
-    sentiment = sentiment or ("positive" if rating is not None and rating >= 5 else "negative")
-    rating = int(rating) if rating is not None else (5 if sentiment == "positive" else 1)
-    comment = comment or reason or ""
+    rating = 5 if sentiment == "positive" else 1
+    reason = ""  # 旧自由文本列，已由 reasons_json + comment 取代
     with _connect() as conn:
         answer = conn.execute(
             "SELECT sources_json FROM answers WHERE id = ? AND user_id = ?",

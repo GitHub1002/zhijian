@@ -139,7 +139,7 @@ def test_results_and_guardrails(temp_db):
         timings={"prepare_ms": 100},
     )
     temp_db.save_feedback(
-        control_answer, control["id"], 5, sentiment="positive", reasons=["helpful"]
+        control_answer, control["id"], sentiment="positive", reasons=["helpful"]
     )
 
     treatment_answer = temp_db.create_answer(treatment["id"], "q2", "拒答", "[]")
@@ -152,7 +152,7 @@ def test_results_and_guardrails(temp_db):
         timings={"prepare_ms": 300},
     )
     temp_db.save_feedback(
-        treatment_answer, treatment["id"], 1, sentiment="negative", reasons=["wrong_info"]
+        treatment_answer, treatment["id"], sentiment="negative", reasons=["wrong_info"]
     )
 
     result = experiments.experiment_results(key, days=14)

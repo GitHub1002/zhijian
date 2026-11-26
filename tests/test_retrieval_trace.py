@@ -55,9 +55,7 @@ def test_feedback_links_to_trace(isolated_db):
     result = rag._refusal("问题", user["id"], ["hr"], "no_grounded_evidence")
     feedback_id = db.save_feedback(
         result["answer_id"],
-        user["id"],
-        1,
-        sentiment="negative",
+        user["id"], sentiment="negative",
         reasons=["retrieval_miss"],
         comment="没有检索到",
     )

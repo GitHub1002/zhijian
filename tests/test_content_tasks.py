@@ -32,7 +32,8 @@ def _eval_run(database):
         return cur.lastrowid
 
 
-def _feedback(database, username="alice", reasons=None, marks=None, rating=1):
+def _feedback(database, username="alice", reasons=None, marks=None,
+              sentiment="negative"):
     user = database.create_user(username, "secret123")
     answer_id = database.create_answer(
         user["id"], "年假多少天", "5 天", json.dumps(SOURCES, ensure_ascii=False)
@@ -40,9 +41,8 @@ def _feedback(database, username="alice", reasons=None, marks=None, rating=1):
     feedback_id = database.save_feedback(
         answer_id,
         user["id"],
-        rating,
-        sentiment="positive" if rating >= 5 else "negative",
-        reasons=reasons or ["wrong_info"],
+        sentiment=sentiment,
+        reasons=reasons or (["wrong_info"] if sentiment == "negative" else ["helpful"]),
         comment="答案不对",
         source_marks=marks,
     )
@@ -67,7 +67,7 @@ def test_missing_source_becomes_doc_missing(temp_db):
     user = temp_db.create_user("alice", "secret123")
     answer_id = temp_db.create_answer(user["id"], "报销流程", "不知道", "[]")
     feedback_id = temp_db.save_feedback(
-        answer_id, user["id"], 1, sentiment="negative",
+        answer_id, user["id"], sentiment="negative",
         reasons=["retrieval_miss"], comment="没找到资料",
     )
     payload = content.build_task(temp_db.feedback_detail(feedback_id))
@@ -121,7 +121,7 @@ def test_update_and_list_tasks(temp_db):
 
 
 def test_positive_feedback_is_not_a_content_task(temp_db):
-    user, feedback_id = _feedback(temp_db, reasons=["helpful"], rating=5)
+    user, feedback_id = _feedback(temp_db, reasons=["helpful"], sentiment="positive")
 
     with pytest.raises(ValueError):
         content.create_task_for_feedback(feedback_id, user["id"])

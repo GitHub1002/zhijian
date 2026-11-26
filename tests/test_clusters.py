@@ -31,7 +31,7 @@ def test_negative_feedback_becomes_clusters(temp_db):
     for question, reason in zip(questions, reasons):
         answer_id = temp_db.create_answer(user["id"], question, "答案", "[]")
         temp_db.save_feedback(
-            answer_id, user["id"], 1, sentiment="negative", reasons=reason, comment="不对"
+            answer_id, user["id"], sentiment="negative", reasons=reason, comment="不对"
         )
 
     items = analytics.clusters(30)

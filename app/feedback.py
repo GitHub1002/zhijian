@@ -30,22 +30,11 @@ TRIAGE_CATEGORIES = {
 }
 
 
-def sentiment_from_rating(rating):
-    return "positive" if int(rating) >= 5 else "negative"
-
-
 def normalize(payload, sources):
-    """把新旧两套反馈字段归一化。校验失败抛 ValueError，由 HTTP 层映射成 422。"""
-    rating = payload.get("rating")
+    """校验并归一化反馈字段。校验失败抛 ValueError，由 HTTP 层映射成 422。"""
     sentiment = payload.get("sentiment")
-    if sentiment is None:
-        if rating is None:
-            raise ValueError("缺少 sentiment 或 rating")
-        sentiment = sentiment_from_rating(rating)
     if sentiment not in {"positive", "negative"}:
         raise ValueError("sentiment 只能是 positive 或 negative")
-    if rating is not None and sentiment_from_rating(rating) != sentiment:
-        raise ValueError("sentiment 与 rating 不一致")
 
     reasons = [str(item) for item in (payload.get("reasons") or []) if str(item)]
     allowed = set(FEEDBACK_REASONS) | POSITIVE_REASONS
@@ -59,10 +48,7 @@ def normalize(payload, sources):
     else:
         reasons = [item for item in reasons if item in POSITIVE_REASONS]
 
-    comment = (payload.get("comment") or payload.get("reason") or "").strip()
-    # 兼容旧前端：只传 rating + 自由文本原因时，把原因归到“其他”。
-    if sentiment == "negative" and not reasons and len(comment) >= 10:
-        reasons = ["other"]
+    comment = (payload.get("comment") or "").strip()
     if sentiment == "negative" and not reasons:
         raise ValueError("点踩时至少选择一个原因")
     if "other" in reasons and len(comment) < 10:
@@ -90,7 +76,6 @@ def normalize(payload, sources):
 
     return {
         "sentiment": sentiment,
-        "rating": int(rating) if rating is not None else (5 if sentiment == "positive" else 1),
         "reasons": reasons,
         "comment": comment,
         "corrected_answer": corrected,

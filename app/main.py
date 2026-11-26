@@ -61,13 +61,11 @@ class FeedbackSourceMark(BaseModel):
 
 class FeedbackRequest(BaseModel):
     answer_id: int
-    rating: Optional[int] = Field(default=None, ge=1, le=5)
-    sentiment: Optional[Literal["positive", "negative"]] = None
+    sentiment: Literal["positive", "negative"]
     reasons: list[str] = Field(default_factory=list)
     comment: str = Field(default="", max_length=2000)
     corrected_answer: str = Field(default="", max_length=4000)
     source_marks: list[FeedbackSourceMark] = Field(default_factory=list, max_length=20)
-    reason: str = Field(default="", max_length=2000)
     client_version: str = Field(default="", max_length=40)
 
 
@@ -941,8 +939,6 @@ def feedback(req: FeedbackRequest, user=Depends(current_user)):
         feedback_id = db.save_feedback(
             req.answer_id,
             user["id"],
-            normalized["rating"],
-            req.reason or "",
             sentiment=normalized["sentiment"],
             reasons=normalized["reasons"],
             comment=normalized["comment"],
@@ -980,7 +976,6 @@ def update_feedback(feedback_id: int, req: FeedbackUpdateRequest, user=Depends(c
     sentiment = payload.get("sentiment") or current["sentiment"]
     merged = {
         "sentiment": sentiment,
-        "rating": 5 if sentiment == "positive" else 1,
         "reasons": payload.get("reasons") if payload.get("reasons") is not None else current["reasons"],
         "comment": payload.get("comment") if payload.get("comment") is not None else current["comment"],
         "corrected_answer": (

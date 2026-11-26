@@ -10,13 +10,11 @@ def test_negative_requires_reason():
         feedback.normalize({"sentiment": "negative", "reasons": []}, SOURCES)
 
 
-def test_old_client_free_text_maps_to_other():
-    result = feedback.normalize(
-        {"rating": 2, "reason": "答非所问，没有引用文档"}, SOURCES
-    )
-    assert result["sentiment"] == "negative"
-    assert result["reasons"] == ["other"]
-    assert result["comment"] == "答非所问，没有引用文档"
+def test_old_rating_payload_is_rejected():
+    with pytest.raises(ValueError):
+        feedback.normalize(
+            {"rating": 2, "reason": "答非所问，没有引用文档"}, SOURCES
+        )
 
 
 def test_positive_defaults_to_helpful():

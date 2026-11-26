@@ -37,9 +37,7 @@ def _seed(database):
     )
     database.save_feedback(
         answer_id,
-        user["id"],
-        1,
-        sentiment="negative",
+        user["id"], sentiment="negative",
         reasons=["wrong_info"],
         comment="答案不对",
     )

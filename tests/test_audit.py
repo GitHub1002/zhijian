@@ -54,7 +54,7 @@ def test_audit_detail_does_not_contain_comment(client):
         ).fetchone()["id"]
     answer_id = db.create_answer(user_id, "年假多少天", "5 天", "[]")
     feedback_id = db.save_feedback(
-        answer_id, user_id, 1, sentiment="negative",
+        answer_id, user_id, sentiment="negative",
         reasons=["wrong_info"], comment="secret-comment",
     )
 

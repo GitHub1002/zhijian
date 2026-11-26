@@ -32,7 +32,7 @@ def test_cleanup_dry_run_and_delete(temp_db):
     audit.log(user["id"], "feedback.triage", "feedback", 1)
 
     temp_db.save_feedback(
-        old_answer, user["id"], 1, sentiment="negative", reasons=["wrong_info"]
+        old_answer, user["id"], sentiment="negative", reasons=["wrong_info"]
     )
 
     with temp_db.connect() as conn:

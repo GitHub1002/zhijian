@@ -40,9 +40,7 @@ def test_export_redacts_pii_by_default(tmp_path, monkeypatch):
     answer_id = db.create_answer(user["id"], "问题", "回答", "[]")
     db.save_feedback(
         answer_id,
-        user["id"],
-        1,
-        sentiment="negative",
+        user["id"], sentiment="negative",
         reasons=["wrong_info"],
         comment="联系 a@b.com 或 13800138000，身份证 110101199001011234",
     )
