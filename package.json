@@ -1,0 +1,14 @@
+{
+  "name": "zhijian-e2e",
+  "private": true,
+  "description": "智检的 Playwright 端到端测试（仅开发依赖，不参与前端构建）",
+  "scripts": {
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed",
+    "e2e:ui": "playwright test --ui",
+    "e2e:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

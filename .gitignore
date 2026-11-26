@@ -38,3 +38,10 @@ __pycache__/
 /data/
 /.cursor/
 /null
+
+# Playwright E2E：依赖、报告、失败截图和 trace 都是本地产物
+/node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
