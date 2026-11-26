@@ -6,6 +6,7 @@
 import json
 import re
 import time
+from typing import TypedDict
 
 from . import config, curated_store, db, embedder, experiments, llm, md_render, store, tracing
 
@@ -373,13 +374,9 @@ def _ask_legacy(question, user_id):
 
 # ---- LangGraph 工作流 ----
 try:
-    from typing import TypedDict
     from langgraph.graph import END, START, StateGraph
-except ImportError:  # 允许旧环境在未安装 langgraph 时使用兼容回退路径
+except ImportError:  # 允许旧环境或纯评测环境在未安装 langgraph 时回退
     END = START = StateGraph = None
-
-    class TypedDict(dict):
-        pass
 
 
 class RagState(TypedDict, total=False):
