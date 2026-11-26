@@ -55,8 +55,11 @@ def test_export_redacts_pii_by_default(tmp_path, monkeypatch):
     assert "[email]" in redacted
     assert "[phone]" in redacted
     assert "[id]" in redacted
+    assert "[user]" in redacted
     assert "a@b.com" not in redacted
+    assert "alice" not in redacted
 
     raw = client.get("/api/admin/feedback/export.csv?redact_pii=false").text
     assert "a@b.com" in raw
     assert "13800138000" in raw
+    assert "alice" in raw

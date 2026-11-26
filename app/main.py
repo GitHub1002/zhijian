@@ -399,6 +399,7 @@ def admin_feedback(
 FEEDBACK_CSV_COLUMNS = (
     ("id", "反馈ID"),
     ("created_at", "提交时间"),
+    ("user_id", "用户ID"),
     ("username", "用户"),
     ("question", "问题"),
     ("answer", "回答"),
@@ -472,7 +473,9 @@ def admin_feedback_export(
         cells = []
         for key, _ in FEEDBACK_CSV_COLUMNS:
             value = row.get(key)
-            if redact_pii and key in _CSV_PII_KEYS:
+            if redact_pii and key == "username":
+                value = "[user]"
+            elif redact_pii and key in _CSV_PII_KEYS:
                 value = _redact_pii(value)
             cells.append(_csv_cell(value))
         writer.writerow(cells)

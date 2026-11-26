@@ -1061,7 +1061,7 @@ def export_feedback(limit=10000, **filters):
                {clause}"""
     with _connect() as conn:
         rows = conn.execute(
-            f"""SELECT f.id, f.created_at, u.username, a.question,
+            f"""SELECT f.id, f.created_at, f.user_id, u.username, a.question,
                        substr(a.answer, 1, 1000) AS answer,
                        f.sentiment, f.rating, f.reasons_json, f.comment,
                        f.corrected_answer, f.status, f.triage_category, f.triage_note,
