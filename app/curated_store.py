@@ -5,7 +5,7 @@
 """
 import json
 
-from . import db
+from . import db, eval_store
 
 STATUSES = {"candidate", "approved", "rejected"}
 
@@ -142,7 +142,7 @@ def update_example(example_id, *, status=None, use_as_few_shot=None,
     if eval_passed is not None:
         updates["eval_passed"] = 1 if eval_passed else 0
     if eval_run_id is not None:
-        updates["eval_run_id"] = None if int(eval_run_id) == 0 else int(eval_run_id)
+        updates["eval_run_id"] = eval_store.ensure_run(eval_run_id)
     if not updates:
         return get_example(example_id)
     updates["updated_at"] = db.now()

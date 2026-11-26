@@ -3,7 +3,7 @@
 从 db.py 拆出来，避免继续把新表逻辑堆进已经很大的持久化层。
 只通过 db.connect()/db.now() 复用连接与时间格式。
 """
-from . import db
+from . import db, eval_store
 
 
 def _connect():
@@ -86,6 +86,7 @@ def list_content_tasks(page=1, page_size=20, *, status=None, priority=None,
 def create_content_task(*, title, description="", source="", heading="", library="",
                         kind="doc_fix", priority="medium", created_by=None,
                         owner_id=None, feedback_id=None, eval_run_id=None):
+    eval_run_id = eval_store.ensure_run(eval_run_id)
     now = _now()
     with _connect() as conn:
         cur = conn.execute(
@@ -127,7 +128,7 @@ def update_content_task(task_id, *, status=None, priority=None, kind=None,
     if resolution_note is not None:
         updates["resolution_note"] = resolution_note
     if eval_run_id is not None:
-        updates["eval_run_id"] = None if int(eval_run_id) == 0 else int(eval_run_id)
+        updates["eval_run_id"] = eval_store.ensure_run(eval_run_id)
     if not updates:
         return get_content_task(task_id)
     updates["updated_at"] = _now()

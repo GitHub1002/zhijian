@@ -567,18 +567,21 @@ def admin_create_content_task(req: ContentTaskRequest, admin=Depends(admin_user)
         raise HTTPException(status_code=422, detail="未知任务类型")
     if req.priority not in content.PRIORITIES:
         raise HTTPException(status_code=422, detail="未知优先级")
-    task = content_store.create_content_task(
-        title=req.title,
-        description=req.description,
-        source=req.source,
-        heading=req.heading,
-        library=req.library,
-        kind=req.kind,
-        priority=req.priority,
-        owner_id=req.owner_id,
-        eval_run_id=req.eval_run_id,
-        created_by=admin["id"],
-    )
+    try:
+        task = content_store.create_content_task(
+            title=req.title,
+            description=req.description,
+            source=req.source,
+            heading=req.heading,
+            library=req.library,
+            kind=req.kind,
+            priority=req.priority,
+            owner_id=req.owner_id,
+            eval_run_id=req.eval_run_id,
+            created_by=admin["id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     audit.log(
         admin["id"], "content_task.create", "content_task", task["id"],
         {"kind": req.kind, "priority": req.priority},
@@ -600,16 +603,19 @@ def admin_update_content_task(
 ):
     if req.kind is not None and req.kind not in content.KINDS:
         raise HTTPException(status_code=422, detail="未知任务类型")
-    task = content_store.update_content_task(
-        task_id,
-        status=req.status,
-        priority=req.priority,
-        kind=req.kind,
-        owner_id=req.owner_id,
-        resolution_note=req.resolution_note,
-        eval_run_id=req.eval_run_id,
-        updated_by=admin["id"],
-    )
+    try:
+        task = content_store.update_content_task(
+            task_id,
+            status=req.status,
+            priority=req.priority,
+            kind=req.kind,
+            owner_id=req.owner_id,
+            resolution_note=req.resolution_note,
+            eval_run_id=req.eval_run_id,
+            updated_by=admin["id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if not task:
         raise HTTPException(status_code=404, detail="内容任务不存在")
     audit.log(
@@ -665,14 +671,17 @@ def admin_curated_example_detail(example_id: int, _admin=Depends(admin_user)):
 def admin_update_curated_example(
     example_id: int, req: CuratedExampleUpdateRequest, admin=Depends(admin_user)
 ):
-    example = curated_store.update_example(
-        example_id,
-        status=req.status,
-        use_as_few_shot=req.use_as_few_shot,
-        eval_passed=req.eval_passed,
-        eval_run_id=req.eval_run_id,
-        reviewed_by=admin["id"],
-    )
+    try:
+        example = curated_store.update_example(
+            example_id,
+            status=req.status,
+            use_as_few_shot=req.use_as_few_shot,
+            eval_passed=req.eval_passed,
+            eval_run_id=req.eval_run_id,
+            reviewed_by=admin["id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if not example:
         raise HTTPException(status_code=404, detail="精选正例不存在")
     audit.log(

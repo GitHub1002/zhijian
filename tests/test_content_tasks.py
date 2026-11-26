@@ -22,6 +22,16 @@ def temp_db(tmp_path, monkeypatch):
     return db
 
 
+def _eval_run(database):
+    with database.connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO eval_runs(run_key, name, dataset, created_at)
+               VALUES ('test-run', 'test-run', 'seed_v2', ?)""",
+            (database.now(),),
+        )
+        return cur.lastrowid
+
+
 def _feedback(database, username="alice", reasons=None, marks=None, rating=1):
     user = database.create_user(username, "secret123")
     answer_id = database.create_answer(
@@ -94,19 +104,20 @@ def test_same_source_and_kind_reuses_open_task(temp_db):
 def test_update_and_list_tasks(temp_db):
     user, feedback_id = _feedback(temp_db)
     task = content.create_task_for_feedback(feedback_id, user["id"])["task"]
+    run_id = _eval_run(temp_db)
 
     updated = content_store.update_content_task(
         task["id"], status="resolved", resolution_note="已补文档",
-        eval_run_id=7, updated_by=user["id"]
+        eval_run_id=run_id, updated_by=user["id"]
     )
     assert updated["status"] == "resolved"
     assert updated["resolution_note"] == "已补文档"
-    assert updated["eval_run_id"] == 7
+    assert updated["eval_run_id"] == run_id
 
     page = content_store.list_content_tasks(status="resolved")
     assert page["total"] == 1
     assert page["items"][0]["feedback_count"] == 1
-    assert page["items"][0]["eval_run_id"] == 7
+    assert page["items"][0]["eval_run_id"] == run_id
 
 
 def test_positive_feedback_is_not_a_content_task(temp_db):
@@ -114,3 +125,11 @@ def test_positive_feedback_is_not_a_content_task(temp_db):
 
     with pytest.raises(ValueError):
         content.create_task_for_feedback(feedback_id, user["id"])
+
+
+def test_invalid_eval_run_is_rejected(temp_db):
+    user, feedback_id = _feedback(temp_db)
+    task = content.create_task_for_feedback(feedback_id, user["id"])["task"]
+
+    with pytest.raises(ValueError):
+        content_store.update_content_task(task["id"], eval_run_id=99999)

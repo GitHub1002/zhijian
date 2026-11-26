@@ -56,6 +56,20 @@ def _connect(path=None):
         conn.close()
 
 
+def ensure_run(run_id):
+    """校验评测运行存在；0/None 表示清空关联。"""
+    if run_id in (None, 0, ""):
+        return None
+    run_id = int(run_id)
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM eval_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    if not row:
+        raise ValueError("评测运行不存在")
+    return run_id
+
+
 def save_payload(payload, path=None):
     """把 run_retrieval_eval 的 payload 写成一次评测运行。"""
     run_key = f"{payload.get('name') or 'retrieval'}-{payload.get('generated_at', '')}"

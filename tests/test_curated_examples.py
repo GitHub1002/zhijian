@@ -34,6 +34,16 @@ def _candidate(database):
     return user, answer_id, curated_store.ensure_candidate(answer_id, feedback_id)
 
 
+def _eval_run(database):
+    with database.connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO eval_runs(run_key, name, dataset, created_at)
+               VALUES ('test-run', 'test-run', 'seed_v2', ?)""",
+            (database.now(),),
+        )
+        return cur.lastrowid
+
+
 def _approved_example(database):
     user, answer_id, candidate = _candidate(database)
     curated_store.update_example(
@@ -41,7 +51,7 @@ def _approved_example(database):
         status="approved",
         use_as_few_shot=True,
         eval_passed=True,
-        eval_run_id=1,
+        eval_run_id=_eval_run(database),
         reviewed_by=user["id"],
     )
     return user, answer_id, candidate
@@ -140,3 +150,15 @@ def test_eval_passed_without_run_is_not_used(temp_db):
     )
 
     assert curated_store.approved_examples(3, ["hr"]) == []
+
+
+def test_invalid_eval_run_is_rejected(temp_db):
+    user, _, candidate = _candidate(temp_db)
+
+    with pytest.raises(ValueError):
+        curated_store.update_example(
+            candidate["id"],
+            eval_passed=True,
+            eval_run_id=99999,
+            reviewed_by=user["id"],
+        )
