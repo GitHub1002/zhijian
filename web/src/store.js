@@ -76,6 +76,7 @@ export const state = reactive({
   adminEvalState: '',
   adminEvalDetail: null,
   adminEvalDetailState: '',
+  adminEvalRerunCommand: '',
   adminAuditEvents: [],
   adminAuditPage: 1,
   adminAuditPages: 1,
@@ -600,6 +601,7 @@ export async function loadAdminEvalRuns(page = 1) {
 
 export async function loadAdminEvalRun(runId) {
   state.adminEvalDetail = null
+  state.adminEvalRerunCommand = ''
   state.adminEvalDetailState = '正在加载评测详情…'
   try {
     const data = await api(`/api/admin/eval/runs/${encodeURIComponent(runId)}`)
@@ -607,6 +609,42 @@ export async function loadAdminEvalRun(runId) {
     state.adminEvalDetailState = ''
   } catch (error) {
     state.adminEvalDetailState = error.message
+  }
+}
+
+export async function deleteAdminEvalRun(runId) {
+  const ok = await askDialog({
+    eyebrow: 'EVAL',
+    title: '删除评测记录',
+    message: `将删除评测运行 #${runId} 及其全部 case 结果，不能撤销。`,
+    okLabel: '删除',
+  })
+  if (ok === null) return false
+  try {
+    await api(`/api/admin/eval/runs/${encodeURIComponent(runId)}`, {
+      method: 'DELETE',
+    })
+    notify('评测记录已删除', 'success')
+    state.adminEvalDetail = null
+    state.adminEvalRerunCommand = ''
+    await loadAdminEvalRuns(state.adminEvalPage)
+    return true
+  } catch (error) {
+    notify(error.message, 'error')
+    return false
+  }
+}
+
+export async function loadAdminEvalRerunCommand(runId) {
+  try {
+    const data = await api(
+      `/api/admin/eval/runs/${encodeURIComponent(runId)}/rerun-command`
+    )
+    state.adminEvalRerunCommand = [data.command, data.note].filter(Boolean).join('\n\n')
+    return state.adminEvalRerunCommand
+  } catch (error) {
+    notify(error.message, 'error')
+    return ''
   }
 }
 

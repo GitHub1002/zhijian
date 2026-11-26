@@ -791,6 +791,22 @@ def admin_eval_run_detail(run_id: int, _admin=Depends(admin_user)):
     return {"run": item}
 
 
+@app.delete("/api/admin/eval/runs/{run_id}")
+def admin_delete_eval_run(run_id: int, admin=Depends(admin_user)):
+    if not eval_store.delete_run(run_id):
+        raise HTTPException(status_code=404, detail="评测记录不存在")
+    audit.log(admin["id"], "eval.delete", "eval_run", run_id)
+    return {"ok": True}
+
+
+@app.get("/api/admin/eval/runs/{run_id}/rerun-command")
+def admin_eval_rerun_command(run_id: int, _admin=Depends(admin_user)):
+    result = eval_store.rerun_command(run_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="评测记录不存在")
+    return result
+
+
 @app.get("/api/admin/audit-log")
 def admin_audit_log(
     page: int = 1,

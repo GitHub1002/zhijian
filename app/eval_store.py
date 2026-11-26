@@ -110,6 +110,38 @@ def save_payload(payload, path=None):
         return run_id
 
 
+def delete_run(run_id):
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM eval_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute("DELETE FROM eval_runs WHERE id = ?", (run_id,))
+        return True
+
+
+def rerun_command(run_id):
+    run = get_run(run_id)
+    if not run:
+        return None
+    requested = (run.get("config") or {}).get("requested") or {}
+    config = json.dumps(requested, ensure_ascii=False)
+    name = f"{run.get('name') or 'retrieval'}-rerun"
+    command = (
+        "python evals/run_retrieval_eval.py "
+        f'--dataset "{run.get("dataset") or ""}" '
+        f'--name "{name}" '
+        f"--config '{config}' "
+        "--save --results-db data/knowledge.db"
+    )
+    return {
+        "command": command,
+        "note": "重跑会使用当前运行中的 Qdrant/SQLite；请先停服务，"
+                "或按 evals/README.md 生成快照后把命令里的数据路径换成快照路径。",
+    }
+
+
 def _run_dict(row, detail=False):
     item = dict(row)
     item["config"] = _load(item.pop("config_json", "{}"), {})

@@ -71,3 +71,21 @@ def test_save_to_custom_results_db(temp_db, tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM eval_results").fetchone()[0] == 2
     finally:
         conn.close()
+
+
+def test_delete_run_and_build_rerun_command(temp_db):
+    run_id = eval_store.save_payload(_payload())
+
+    command = eval_store.rerun_command(run_id)
+    assert "run_retrieval_eval.py" in command["command"]
+    assert "seed_v2" in command["command"]
+    assert command["note"]
+
+    assert eval_store.delete_run(run_id) is True
+    assert eval_store.get_run(run_id) is None
+    assert eval_store.delete_run(run_id) is False
+
+    with temp_db.connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM eval_results WHERE run_id = ?", (run_id,)
+        ).fetchone()["n"] == 0

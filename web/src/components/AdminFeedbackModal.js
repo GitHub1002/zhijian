@@ -11,6 +11,8 @@ import {
   loadExperimentResults,
   loadAdminEvalRuns,
   loadAdminEvalRun,
+  loadAdminEvalRerunCommand,
+  deleteAdminEvalRun,
   loadAdminAudit,
   createExperiment,
   updateExperiment,
@@ -163,6 +165,14 @@ export default {
       loadAdminEvalRun(runId)
     }
 
+    function showEvalRerun(runId) {
+      loadAdminEvalRerunCommand(runId)
+    }
+
+    function removeEvalRun(runId) {
+      deleteAdminEvalRun(runId)
+    }
+
     function datasetName(path) {
       return String(path || '').split(/[\\/]/).pop() || path || ''
     }
@@ -299,6 +309,8 @@ export default {
       saveCurated,
       loadEvals,
       showEvalRun,
+      showEvalRerun,
+      removeEvalRun,
       datasetName,
       loadAudits,
       formatDetail,
@@ -650,6 +662,11 @@ export default {
             <div v-if="state.adminEvalDetailState" class="admin-users-state">{{ state.adminEvalDetailState }}</div>
             <div v-else-if="state.adminEvalDetail" class="admin-eval-detail">
               <div class="admin-section-title">评测详情 · {{ state.adminEvalDetail.name }}</div>
+              <div class="admin-feedback-filters">
+                <button class="toolbar-btn" type="button" @click="showEvalRerun(state.adminEvalDetail.id)">重跑命令</button>
+                <button class="toolbar-btn" type="button" @click="removeEvalRun(state.adminEvalDetail.id)">删除</button>
+              </div>
+              <pre v-if="state.adminEvalRerunCommand" class="admin-curated-answer">{{ state.adminEvalRerunCommand }}</pre>
               <table class="admin-analytics-table">
                 <thead><tr><th>case</th><th>可回答</th><th>grounded</th><th>hit@5</th><th>错误</th></tr></thead>
                 <tbody>
