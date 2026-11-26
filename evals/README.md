@@ -65,10 +65,11 @@ python evals/run_retrieval_eval.py \
 python evals/run_ragas_eval.py \
   --dataset evals/datasets/seed_v2.jsonl --limit 20
 
-# 安装 RAGAS 后可用
+# 安装 RAGAS 后可用：DeepSeek 作裁判，本地 BGE 作 embedding
 pip install -r evals/requirements-eval.txt
 python evals/run_ragas_eval.py \
   --dataset evals/datasets/seed_v2.jsonl --limit 20 --provider ragas
+# 需要 .env 里有 DEEPSEEK_API_KEY
 
 # 参数扫描：同一组检索参数只跑一次，门槛在缓存结果上复用
 python evals/run_sweep.py \
