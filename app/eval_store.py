@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     dataset TEXT NOT NULL DEFAULT '',
     config_json TEXT NOT NULL DEFAULT '{}',
     aggregate_json TEXT NOT NULL DEFAULT '{}',
-    passed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_eval_runs_created ON eval_runs(created_at DESC);
@@ -77,15 +76,14 @@ def save_payload(payload, path=None):
     with _connect(path) as conn:
         conn.execute(
             """INSERT OR IGNORE INTO eval_runs(
-                run_key, name, dataset, config_json, aggregate_json, passed, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                run_key, name, dataset, config_json, aggregate_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)""",
             (
                 run_key,
                 payload.get("name") or "retrieval",
                 payload.get("dataset") or "",
                 json.dumps(payload.get("config") or {}, ensure_ascii=False),
                 json.dumps(payload.get("aggregate") or {}, ensure_ascii=False),
-                1 if payload.get("passed") else 0,
                 now,
             ),
         )
@@ -116,7 +114,6 @@ def _run_dict(row, detail=False):
     item = dict(row)
     item["config"] = _load(item.pop("config_json", "{}"), {})
     item["aggregate"] = _load(item.pop("aggregate_json", "{}"), {})
-    item["passed"] = bool(item.get("passed"))
     if detail:
         results = []
         for result in item.pop("results", []):

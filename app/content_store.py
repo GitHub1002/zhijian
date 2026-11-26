@@ -92,13 +92,13 @@ def create_content_task(*, title, description="", source="", heading="", library
         cur = conn.execute(
             """INSERT INTO content_tasks(
                 source, heading, library, title, description, kind, priority, status,
-                owner_id, created_by, updated_by, feedback_id, eval_run_id,
+                owner_id, created_by, updated_by, eval_run_id,
                 resolution_note, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, '', ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, '', ?, ?)""",
             (
                 source or "", heading or "", library or "", title, description or "",
                 kind or "doc_fix", priority or "medium", owner_id, created_by,
-                created_by, feedback_id, eval_run_id, now, now,
+                created_by, eval_run_id, now, now,
             ),
         )
         task_id = cur.lastrowid

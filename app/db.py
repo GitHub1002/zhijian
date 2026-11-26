@@ -117,6 +117,24 @@ def _migrate_v11(conn):
     conn.execute("DROP TABLE IF EXISTS legacy_learning_notes")
 
 
+def _migrate_v12(conn):
+    """把任务的首条反馈补进 join 表，再删除冗余列。"""
+    if "feedback_id" in _columns(conn, "content_tasks"):
+        conn.execute(
+            """INSERT OR IGNORE INTO content_task_feedback(
+                task_id, feedback_id, created_at
+            )
+            SELECT id, feedback_id, created_at
+            FROM content_tasks WHERE feedback_id IS NOT NULL"""
+        )
+        _drop_column(conn, "content_tasks", "feedback_id")
+
+
+def _migrate_v13(conn):
+    """删除从未计算过的 eval_runs.passed。"""
+    _drop_column(conn, "eval_runs", "passed")
+
+
 def _load_json(value, fallback):
     try:
         parsed = json.loads(value or "")
@@ -234,7 +252,6 @@ def init_db():
                 owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                feedback_id INTEGER REFERENCES feedback(id) ON DELETE SET NULL,
                 eval_run_id INTEGER,
                 resolution_note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
@@ -280,7 +297,6 @@ def init_db():
                 dataset TEXT NOT NULL DEFAULT '',
                 config_json TEXT NOT NULL DEFAULT '{}',
                 aggregate_json TEXT NOT NULL DEFAULT '{}',
-                passed INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_eval_runs_created
@@ -511,9 +527,11 @@ def init_db():
         _add_column(conn, "curated_examples", "eval_passed", "INTEGER NOT NULL DEFAULT 0")
         _add_column(conn, "curated_examples", "eval_run_id", "INTEGER")
         _migrate_v11(conn)
-        conn.execute("PRAGMA user_version = 11")
+        _migrate_v12(conn)
+        _migrate_v13(conn)
+        conn.execute("PRAGMA user_version = 13")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '11', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '13', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )
