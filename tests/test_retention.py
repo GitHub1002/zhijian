@@ -1,4 +1,4 @@
-"""保留期清理：只删旧轨迹/点击/审计/归档记忆，不动反馈。"""
+"""保留期清理：只删旧轨迹/点击/审计，不动反馈。"""
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -45,23 +45,11 @@ def test_cleanup_dry_run_and_delete(temp_db):
             (old, old_answer),
         )
         conn.execute("UPDATE admin_audit_log SET created_at = ?", (old,))
-        conn.execute(
-            """CREATE TABLE legacy_assistant_memory (
-                user_id INTEGER PRIMARY KEY,
-                summary TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL
-            )"""
-        )
-        conn.execute(
-            "INSERT INTO legacy_assistant_memory(user_id, summary, updated_at) VALUES (?, ?, ?)",
-            (user["id"], "旧摘要", old),
-        )
 
     dry = retention.cleanup(dry_run=True)
     assert dry["answer_traces"] == 1
     assert dry["source_clicks"] == 1
     assert dry["admin_audit_log"] == 1
-    assert dry["legacy_assistant_memory"] == 1
 
     with temp_db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) AS n FROM answer_traces").fetchone()["n"] == 2
@@ -74,13 +62,9 @@ def test_cleanup_dry_run_and_delete(temp_db):
         ).fetchall()
         clicks = conn.execute("SELECT answer_id FROM source_clicks").fetchall()
         audit_count = conn.execute("SELECT COUNT(*) AS n FROM admin_audit_log").fetchone()["n"]
-        legacy_count = conn.execute(
-            "SELECT COUNT(*) AS n FROM legacy_assistant_memory"
-        ).fetchone()["n"]
         feedback_count = conn.execute("SELECT COUNT(*) AS n FROM feedback").fetchone()["n"]
 
     assert [row["answer_id"] for row in traces] == [new_answer]
     assert [row["answer_id"] for row in clicks] == [new_answer]
     assert audit_count == 0
-    assert legacy_count == 0
     assert feedback_count == 1

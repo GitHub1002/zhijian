@@ -18,7 +18,6 @@ from app import config, db, retention  # noqa: E402
 def main():
     parser = argparse.ArgumentParser(description="保留期清理")
     parser.add_argument("--db-path", default=str(ROOT / "data" / "knowledge.db"))
-    parser.add_argument("--memory-days", type=int, default=90)
     parser.add_argument("--trace-days", type=int, default=config.TRACE_RETENTION_DAYS)
     parser.add_argument("--click-days", type=int, default=180)
     parser.add_argument("--audit-days", type=int, default=365)
@@ -27,7 +26,6 @@ def main():
 
     db._DB_PATH = Path(args.db_path)
     counts = retention.cleanup(
-        memory_days=args.memory_days,
         trace_days=args.trace_days,
         click_days=args.click_days,
         audit_days=args.audit_days,

@@ -96,20 +96,25 @@ def _add_column(conn, table, name, ddl):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
-def _archive_table(conn, old, archive):
-    """把已停用的表改名到 legacy_*；两边都存在时先并数据再删旧表。"""
-    if not _table_exists(conn, old):
-        return False
-    if not _table_exists(conn, archive):
-        conn.execute(f"ALTER TABLE {old} RENAME TO {archive}")
-        return True
-    shared = sorted(_columns(conn, old) & _columns(conn, archive))
-    if not shared:
-        return False
-    names = ", ".join(shared)
-    conn.execute(f"INSERT OR IGNORE INTO {archive}({names}) SELECT {names} FROM {old}")
-    conn.execute(f"DROP TABLE {old}")
-    return True
+def _drop_column(conn, table, name):
+    if name in _columns(conn, table):
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
+
+
+def _migrate_v11(conn):
+    """合并旧反馈自由文本，移除 legacy 记忆表。"""
+    if "reason" in _columns(conn, "feedback"):
+        conn.execute(
+            """UPDATE feedback
+               SET comment = CASE
+                   WHEN comment = '' THEN reason
+                   ELSE comment || char(10) || reason
+               END
+               WHERE reason <> ''"""
+        )
+        _drop_column(conn, "feedback", "reason")
+    conn.execute("DROP TABLE IF EXISTS legacy_assistant_memory")
+    conn.execute("DROP TABLE IF EXISTS legacy_learning_notes")
 
 
 def _load_json(value, fallback):
@@ -173,7 +178,6 @@ def init_db():
                 answer_id INTEGER NOT NULL UNIQUE REFERENCES answers(id) ON DELETE CASCADE,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
-                reason TEXT NOT NULL DEFAULT '',
                 sentiment TEXT NOT NULL DEFAULT '',
                 reasons_json TEXT NOT NULL DEFAULT '[]',
                 comment TEXT NOT NULL DEFAULT '',
@@ -495,7 +499,6 @@ def init_db():
             "UPDATE feedback SET sentiment = CASE WHEN rating >= 5 THEN 'positive' ELSE 'negative' END "
             "WHERE sentiment = ''"
         )
-        conn.execute("UPDATE feedback SET comment = reason WHERE comment = '' AND reason <> ''")
         conn.execute(
             "UPDATE feedback SET reasons_json = '[\"other\"]' "
             "WHERE sentiment = 'negative' AND reasons_json = '[]'"
@@ -507,9 +510,10 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_trace ON feedback(trace_id)")
         _add_column(conn, "curated_examples", "eval_passed", "INTEGER NOT NULL DEFAULT 0")
         _add_column(conn, "curated_examples", "eval_run_id", "INTEGER")
-        conn.execute("PRAGMA user_version = 10")
+        _migrate_v11(conn)
+        conn.execute("PRAGMA user_version = 11")
         conn.execute(
-            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '10', ?) "
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('schema_version', '11', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (_now(),),
         )
@@ -518,9 +522,6 @@ def init_db():
                 "INSERT INTO permission_catalog(permission_key, name, description) VALUES (?, ?, ?) ON CONFLICT(permission_key) DO UPDATE SET name=excluded.name, description=excluded.description",
                 (item["key"], item["name"], item["description"]),
             )
-        # 旧记忆表已无读写点，改名归档，主库不再保留。
-        _archive_table(conn, "assistant_memory", "legacy_assistant_memory")
-        _archive_table(conn, "learning_notes", "legacy_learning_notes")
         _rebuild_fts_index(conn)
 
 
@@ -868,7 +869,6 @@ def save_feedback(answer_id, user_id, *, sentiment, reasons=None,
         raise ValueError("sentiment 只能是 positive 或 negative")
     now = _now()
     rating = 5 if sentiment == "positive" else 1
-    reason = ""  # 旧自由文本列，已由 reasons_json + comment 取代
     with _connect() as conn:
         answer = conn.execute(
             "SELECT sources_json FROM answers WHERE id = ? AND user_id = ?",
@@ -879,14 +879,13 @@ def save_feedback(answer_id, user_id, *, sentiment, reasons=None,
         trace_id = _trace_id_for_answer(conn, answer_id)
         cur = conn.execute(
             """INSERT INTO feedback(
-                answer_id, user_id, rating, reason, sentiment, reasons_json, comment,
+                answer_id, user_id, rating, sentiment, reasons_json, comment,
                 corrected_answer, trace_id, status, updated_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)""",
             (
                 answer_id,
                 user_id,
                 rating,
-                reason,
                 sentiment,
                 _dump_json(list(reasons or [])),
                 comment,

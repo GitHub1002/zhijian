@@ -8,11 +8,8 @@ def _cutoff(days):
     return (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).isoformat()
 
 
-def cleanup(*, memory_days=90, trace_days=180, click_days=180, audit_days=365,
-            dry_run=False):
+def cleanup(*, trace_days=180, click_days=180, audit_days=365, dry_run=False):
     specs = (
-        ("legacy_assistant_memory", "updated_at", memory_days),
-        ("legacy_learning_notes", "created_at", memory_days),
         ("answer_traces", "created_at", trace_days),
         ("source_clicks", "created_at", click_days),
         ("admin_audit_log", "created_at", audit_days),
