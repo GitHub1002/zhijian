@@ -63,6 +63,8 @@ def _build_points(source, content):
 
 
 def run_ingest():
+    # 脚本入口直接调用时没有 FastAPI startup，先确保表结构存在。
+    db.init_db()
     # 全量重建：按文件替换向量和 FTS，最后删除磁盘上已不存在的 source。
     # 单个文件提取失败时跳过并保留旧索引（见下面 except），避免一次坏文件清空全库。
     doc_files = documents.iter_files(config.DOCS_DIR)

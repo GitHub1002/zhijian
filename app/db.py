@@ -1478,6 +1478,3 @@ def search_bm25(query, libraries, limit=20):
     if anchors:
         rows = [row for row in rows if anchors.intersection(_fts_terms(row["text"]))]
     return rows[:limit]
-
-
-init_db()

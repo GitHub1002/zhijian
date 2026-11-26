@@ -12,6 +12,7 @@ import re
 import sqlite3
 import mimetypes
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
@@ -31,7 +32,13 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 # 字体与常用前端资源的 MIME 修正，避免被识别为 octet-stream 导致浏览器拒绝加载
 for _ext, _mime in ((".ttf", "font/ttf"), (".woff", "font/woff"), (".woff2", "font/woff2"), (".otf", "font/otf")):
     mimetypes.add_type(_mime, _ext)
-app = FastAPI(title="智检")
+@asynccontextmanager
+async def lifespan(_app):
+    db.init_db()
+    yield
+
+
+app = FastAPI(title="智检", lifespan=lifespan)
 app.middleware("http")(observability.middleware)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
