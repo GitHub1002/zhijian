@@ -4,6 +4,7 @@
 
 # 虚拟环境与缓存（可再生成，不提交）
 .venv/
+.venv-*/
 venv/
 __pycache__/
 *.pyc
