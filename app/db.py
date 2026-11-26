@@ -540,7 +540,6 @@ def init_db():
                 "INSERT INTO permission_catalog(permission_key, name, description) VALUES (?, ?, ?) ON CONFLICT(permission_key) DO UPDATE SET name=excluded.name, description=excluded.description",
                 (item["key"], item["name"], item["description"]),
             )
-        _rebuild_fts_index(conn)
 
 
 def _fts_terms(value):
@@ -567,10 +566,7 @@ def _fts_query(value):
 
 
 def _rebuild_fts_index(conn):
-    """search_chunks_fts 是派生索引，启动时全量重建以兼容旧版本索引。
-
-    当前文档量下可接受，切块数量级上到万级时应改为增量维护。
-    """
+    """手动全量重建 FTS，用于索引版本升级或排查不一致。"""
     conn.execute("DELETE FROM search_chunks_fts")
     rows = conn.execute("SELECT chunk_id, source, title, heading, text, library FROM search_chunks").fetchall()
     conn.executemany(
@@ -582,6 +578,12 @@ def _rebuild_fts_index(conn):
             for row in rows
         ],
     )
+
+
+def rebuild_fts():
+    """显式重建全文索引；正常入库由 replace_search_chunks 增量维护。"""
+    with _connect() as conn:
+        _rebuild_fts_index(conn)
 
 
 def _hash_password(password):
