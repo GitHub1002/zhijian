@@ -6,5 +6,3 @@ langchain>=0.3.30,<1.0
 langchain-core>=0.3.85,<1.0
 langchain-openai>=0.3.35,<1.0
 langchain-community>=0.3,<1.0
-# Optional cross-check: uncomment to compare with LlamaIndex RetrieverEvaluator.
-# llama-index-core>=0.11,<0.13
