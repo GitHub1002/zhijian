@@ -28,6 +28,10 @@ SESSION_SECURE = os.getenv("SESSION_SECURE", "0").lower() in {"1", "true", "yes"
 # 登录失败限流：同一 IP + 用户名在窗口内失败次数达到上限后短暂拒绝。
 LOGIN_MAX_ATTEMPTS = max(1, int(os.getenv("LOGIN_MAX_ATTEMPTS", "5")))
 LOGIN_WINDOW_SECONDS = max(10, int(os.getenv("LOGIN_WINDOW_SECONDS", "300")))
+# 可选结构化日志文件；留空则只输出到 stdout。
+LOG_FILE = os.getenv("LOG_FILE", "")
+LOG_MAX_BYTES = max(1024, int(os.getenv("LOG_MAX_BYTES", str(5 * 1024 * 1024))))
+LOG_BACKUP_COUNT = max(1, int(os.getenv("LOG_BACKUP_COUNT", "5")))
 
 COLLECTION_NAME = "knowledge_docs"
 # 混合检索先各取 HYBRID_TOP_K 条，融合后再重排，最后只把 RERANK_TOP_K 段交给模型。

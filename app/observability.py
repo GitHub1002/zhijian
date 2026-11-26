@@ -8,10 +8,34 @@ import logging
 import time
 import uuid
 from contextvars import ContextVar
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+from . import config
 
 REQUEST_ID = ContextVar("request_id", default="")
 logger = logging.getLogger("app.request")
 logger.setLevel(logging.INFO)
+
+
+def setup_logging():
+    """配置可选的轮转文件日志；LOG_FILE 留空时只输出 stdout。"""
+    if not config.LOG_FILE:
+        return
+    target = Path(config.LOG_FILE)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    resolved = str(target.resolve())
+    for handler in logger.handlers:
+        if isinstance(handler, RotatingFileHandler) and handler.baseFilename == resolved:
+            return
+    handler = RotatingFileHandler(
+        target,
+        maxBytes=config.LOG_MAX_BYTES,
+        backupCount=config.LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
 
 
 def new_request_id():

@@ -34,6 +34,7 @@ for _ext, _mime in ((".ttf", "font/ttf"), (".woff", "font/woff"), (".woff2", "fo
     mimetypes.add_type(_mime, _ext)
 @asynccontextmanager
 async def lifespan(_app):
+    observability.setup_logging()
     db.init_db()
     yield
 
