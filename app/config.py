@@ -25,6 +25,9 @@ DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "data" / "knowledge.db"))
 DAILY_ASK_LIMIT = int(os.getenv("DAILY_ASK_LIMIT", "10"))
 SESSION_COOKIE = "kb_session"
 SESSION_SECURE = os.getenv("SESSION_SECURE", "0").lower() in {"1", "true", "yes"}
+# 登录失败限流：同一 IP + 用户名在窗口内失败次数达到上限后短暂拒绝。
+LOGIN_MAX_ATTEMPTS = max(1, int(os.getenv("LOGIN_MAX_ATTEMPTS", "5")))
+LOGIN_WINDOW_SECONDS = max(10, int(os.getenv("LOGIN_WINDOW_SECONDS", "300")))
 
 COLLECTION_NAME = "knowledge_docs"
 # 混合检索先各取 HYBRID_TOP_K 条，融合后再重排，最后只把 RERANK_TOP_K 段交给模型。

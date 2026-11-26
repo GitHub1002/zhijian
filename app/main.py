@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field
 
-from . import analytics, audit, config, content, content_store, curated_store, db, documents, eval_store, experiments, feedback as feedback_rules, ingest, llm, md_render, observability, rag, tracing
+from . import analytics, audit, config, content, content_store, curated_store, db, documents, eval_store, experiments, feedback as feedback_rules, ingest, llm, md_render, observability, rag, rate_limit, tracing
 
 logger = logging.getLogger(__name__)
 
@@ -245,10 +245,18 @@ def register(req: AuthRequest, response: Response):
 
 
 @app.post("/api/auth/login")
-def login(req: AuthRequest, response: Response):
+def login(req: AuthRequest, response: Response, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    key = f"login:{ip}:{req.username.strip().lower()}"
+    if rate_limit.blocked(
+        key, config.LOGIN_MAX_ATTEMPTS, config.LOGIN_WINDOW_SECONDS
+    ):
+        raise HTTPException(status_code=429, detail="登录尝试过多，请稍后再试")
     user = db.authenticate(req.username, req.password)
     if not user:
+        rate_limit.fail(key, config.LOGIN_WINDOW_SECONDS)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    rate_limit.reset(key)
     _set_session(response, user["id"])
     return {"user": user, "quota": db.quota_status(user["id"])}
 
