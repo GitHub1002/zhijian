@@ -164,3 +164,44 @@ def test_results_and_guardrails(temp_db):
     assert items["treatment"]["negative_rate"] == 1.0
     assert items["treatment"]["guardrail_breached"] is True
     assert len(items["treatment"]["guardrail_flags"]) == 3
+
+
+def test_min_vector_score_is_not_an_experiment_parameter():
+    with pytest.raises(ValueError):
+        experiments.validate_config({"MIN_VECTOR_SCORE": 0.4})
+
+
+def test_running_experiment_cannot_replace_variants(temp_db):
+    key = _experiment(temp_db)
+    replacement = [
+        {"variant_key": "control", "name": "对照", "config": {},
+         "traffic_pct": 50, "is_control": True},
+        {"variant_key": "treatment", "name": "实验",
+         "config": {"MIN_RERANK_SCORE": 0.3}, "traffic_pct": 50,
+         "is_control": False},
+    ]
+
+    with pytest.raises(ValueError):
+        experiments.update_experiment(key, variants=replacement)
+
+    experiments.update_experiment(key, status="paused")
+    updated = experiments.update_experiment(key, variants=replacement)
+    assert updated["variants"][1]["config"] == {"MIN_RERANK_SCORE": 0.3}
+
+
+def test_conflicting_config_key_blocks_second_experiment(temp_db):
+    _experiment(temp_db, "first")
+
+    experiments.create_experiment("second", "第二个", variants=VARIANTS)
+    with pytest.raises(ValueError):
+        experiments.update_experiment("second", status="running")
+
+    different = [
+        {"variant_key": "control", "name": "对照", "config": {},
+         "traffic_pct": 50, "is_control": True},
+        {"variant_key": "treatment", "name": "实验",
+         "config": {"HYBRID_TOP_K": 8}, "traffic_pct": 50,
+         "is_control": False},
+    ]
+    experiments.create_experiment("third", "第三个", variants=different)
+    assert experiments.update_experiment("third", status="running")["status"] == "running"

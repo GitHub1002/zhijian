@@ -16,7 +16,6 @@ STATUSES = {"draft", "running", "paused", "ended"}
 CONFIG_LIMITS = {
     "HYBRID_TOP_K": (5, 30),
     "RRF_K": (10, 120),
-    "MIN_VECTOR_SCORE": (0.2, 0.6),
     "MIN_RERANK_SCORE": (-10.0, 5.0),
     "RERANK_TOP_K": (1, 8),
     "RERANK_ENABLED": None,
@@ -96,6 +95,27 @@ def _normalize_variants(variants):
     if not any(item["is_control"] and item["traffic_pct"] > 0 for item in normalized):
         raise ValueError("对照组流量必须大于 0")
     return normalized
+
+
+def _config_keys(variants):
+    keys = set()
+    for variant in variants or []:
+        keys.update((variant.get("config") or {}).keys())
+    return keys
+
+
+def _running_config_keys(conn, exclude_key):
+    rows = conn.execute(
+        """SELECT v.config_json
+           FROM experiments e
+           JOIN experiment_variants v ON v.experiment_key = e.key
+           WHERE e.status = 'running' AND e.key <> ?""",
+        (exclude_key or "",),
+    ).fetchall()
+    keys = set()
+    for row in rows:
+        keys.update(_load_json(row["config_json"], {}).keys())
+    return keys
 
 
 def _variants(conn, experiment_key):
@@ -192,8 +212,28 @@ def update_experiment(key, *, status=None, variants=None, guardrails=None):
     updates["updated_at"] = db.now()
     normalized = _normalize_variants(variants) if variants is not None else None
     with db.connect() as conn:
-        if not conn.execute("SELECT 1 FROM experiments WHERE key = ?", (key,)).fetchone():
+        row = conn.execute(
+            "SELECT status FROM experiments WHERE key = ?", (key,)
+        ).fetchone()
+        if not row:
             return None
+        current_status = row["status"]
+        if (
+            normalized is not None
+            and current_status == "running"
+            and status in (None, "running")
+        ):
+            raise ValueError("运行中的实验不能直接替换变体，请先暂停")
+        target_status = status or current_status
+        if target_status == "running":
+            candidate_variants = (
+                normalized if normalized is not None else _variants(conn, key)
+            )
+            conflict = _running_config_keys(conn, key) & _config_keys(candidate_variants)
+            if conflict:
+                raise ValueError(
+                    "实验参数已被运行中的实验占用：" + "、".join(sorted(conflict))
+                )
         assignments = ", ".join(f"{name} = ?" for name in updates)
         conn.execute(
             f"UPDATE experiments SET {assignments} WHERE key = ?",
