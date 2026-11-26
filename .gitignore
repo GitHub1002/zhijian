@@ -29,3 +29,6 @@ __pycache__/
 /evals/reports/
 /evals/.cache/
 /data/eval/
+
+# pytest 在项目根目录生成的临时库
+/.pytest_tmp/
